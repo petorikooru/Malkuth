@@ -4,7 +4,8 @@
 > For now, DO NOT USE the PCB Design unless you know what you are doing
 > There are quite a silly (and a bit major) design flaws on there
 
-> ![NOTE]
+
+> [!NOTE]  
 > For now, the audio handling is a bit stuttery on some FLAC audio
 > (especially on 24 bit one). I will make it a todo list for now
 
