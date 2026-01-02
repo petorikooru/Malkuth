@@ -4,7 +4,7 @@ Idk, the name just comes up in my head (that malkuth from BA)
 
 > [!CAUTION]
 > For now, DO NOT USE the PCB Design unless you know what you are doing.
-> There are quite illy (and tiny bit major) design flaws on there
+> There are quite silly (and tiny bit major) design flaws on there
 
 
 > [!NOTE]  
