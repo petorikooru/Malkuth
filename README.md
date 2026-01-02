@@ -22,7 +22,7 @@ I create this to fulfill my final project of Microcomputer class lmao.
 ## Hardware Components
 
 - ILI9488 Capacitive Touch Screen Display
-- PCM5012a DAC
+- PCM5102a DAC
 - MicroSD Card Module
 - ESP32-S3 V2
 - Kailh Choc v2 switch
