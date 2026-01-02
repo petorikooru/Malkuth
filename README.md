@@ -1,4 +1,6 @@
-# Yet another Audio Player
+# Malkuth
+
+Idk, the name just comes up in my head (that malkuth from BA)
 
 > [!CAUTION]
 > For now, DO NOT USE the PCB Design unless you know what you are doing
