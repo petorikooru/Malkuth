@@ -30,17 +30,13 @@ I create this to fulfill my final project of Microcomputer class lmao.
 
 ## Screenshot
 
-### Player Menu
-
-![Player Menu](./assets/player_menu.jpg_menu.jpg)
-
-### Files Menu
-
-![Files Menu](./assets/files_menu.jpg)
-
-### Settings Menu
-
-![Settings Menu](./assets/settings_menu.jpg_menu.jpg)
+<table>
+  <tr>
+    <td> <img src="./assets/player_menu.jpg" alt="Player Menu" width="300"></td>
+    <td> <img src="./assets/files_menu.jpg" alt="Files Menu" width="300"></td>
+    <td> <img src="./assets/settings_menu.jpg" alt="Settings Menu" width="300"></td>
+  </tr> 
+</table>
 
 ## TODO List
 
