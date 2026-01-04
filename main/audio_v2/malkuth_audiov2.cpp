@@ -1,35 +1,124 @@
-#include "malkuth_audio.h"
+#include "malkuth_audiov2.h"
 
-MalkuthAudio* MalkuthAudio::self = nullptr;
+///
+/// Private Function
+///
 
-bool MalkuthAudio::init(uint8_t pin_bck, uint8_t pin_ws, uint8_t pin_data){
+MalkuthAudio* MalkuthAudio::_instance = nullptr;
+
+void MalkuthAudio::task_audio(void* parameters) {
+    MalkuthAudio* self = static_cast<MalkuthAudio*>(parameters);
+    AudioCommand cmd;
+
+    self->_instance = self;
+
     AudioLogger::instance().begin(Serial, AudioLogger::Warning);
-    auto config = _i2s.defaultConfig(TX_MODE);
-    
-    self = this;
 
-    _source = new AudioSourceVector<FsFile>(&file_to_stream_callback);
-    _player = new AudioPlayer(*_source, _i2s, _decoder);
-    _directory = new NamePrinter(*_source);
+    auto cfg = self->_i2s.defaultConfig(TX_MODE);
+    cfg.pin_bck  = self->_pin_bck;
+    cfg.pin_ws   = self->_pin_ws;
+    cfg.pin_data = self->_pin_data;
 
-    config.pin_bck  = pin_bck;
-    config.pin_ws   = pin_ws;
-    config.pin_data = pin_data;
+    if (!self->_i2s.begin(cfg))
+        self->_init_ok = false;
 
-    _decoder.addDecoder(_decoder_mp3, "audio/mpeg");
-    _decoder.addDecoder(_decoder_aac, "audio/aac");
-    _decoder.addDecoder(_decoder_wav, "audio/vnd.wave");
-    _decoder.addDecoder(_decoder_flac, "audio/flac");
-
-    if (!_i2s.begin(config)) {
-      Serial.println("I2S failed to start");
-      return false;
+    self->_init_ok = true;
+    if (self->_init_waiter) {
+        xTaskNotifyGive(self->_init_waiter);
     }
-    return true;
+
+    self->_decoder.addDecoder(self->_decoder_mp3,  "audio/mpeg");
+    self->_decoder.addDecoder(self->_decoder_aac,  "audio/aac");
+    self->_decoder.addDecoder(self->_decoder_wav,  "audio/wav");
+    self->_decoder.addDecoder(self->_decoder_flac, "audio/flac");
+
+    self->_source    = new AudioSourceVector<FsFile>(&file_to_stream_callback);
+    self->_player    = new AudioPlayer(*self->_source, self->_i2s, self->_decoder);
+    self->_directory = new NamePrinter(*self->_source);
+
+    while (true) {
+      xQueueReceive(self->_queue_audio, &cmd, portMAX_DELAY);
+      self->handle_command(self, cmd);
+
+      self->_player->copy();
+      vTaskDelay(1);
+    }
 }
 
-FsFile* MalkuthAudio::file_to_stream_callback(const char* path, FsFile& old_file){
-    return self->file_to_stream(path, old_file);
+void MalkuthAudio::handle_command(MalkuthAudio* self, const AudioCommand& cmd) {
+    switch (cmd.type) {
+        case AudioCommandType::PLAY:
+            self->_player->play();
+            self->_playing = true;
+            break;
+
+        case AudioCommandType::STOP:
+            self->_player->stop();
+            self->_playing = false;
+            break;
+
+        case AudioCommandType::TOGGLE:
+            self->_playing ? self->_player->stop()
+                           : self->_player->play();
+            self->_playing = !self->_playing;
+            break;
+
+        case AudioCommandType::NEXT:
+            self->_player->next();
+            break;
+
+        case AudioCommandType::PREVIOUS:
+            self->_player->previous();
+            break;
+
+        case AudioCommandType::SET_VOLUME:
+            self->_volume = cmd.payload.volume;
+            if (self->_volume > 100)
+                self->_volume = 100;
+              
+            self->_player->setVolume(self->_volume / 100.0f);
+            break;
+
+        case AudioCommandType::PROCESS_DIRECTORY:
+            process_directory_task(self, cmd);
+            break;
+    } 
+}
+
+void MalkuthAudio::process_directory_task(MalkuthAudio* self, const AudioCommand& cmd){
+    self->_player->stop();
+    self->_source->clear();
+
+    self->_cover_priority = CoverPriority::NONE;
+    self->_image_type = ImageType::NONE;
+    self->_cover_path[0] = 0;
+
+    SdFile dir, entry;
+    dir.open(cmd.payload.path);
+
+    while (entry.openNext(&dir, O_RDONLY)) {
+        char name[128];
+        entry.getName(name, sizeof(name));
+        self->process_albumcover(String(cmd.payload.path) + name);
+        entry.close();
+    }
+    dir.close();
+
+    self->_audio_file = self->_sd->open(cmd.payload.path, O_READ);
+    if (self->_audio_file) {
+        self->_directory->setPrefix(cmd.payload.path);
+        self->_audio_file.ls(self->_directory, LS_R);
+        self->_audio_file.close();
+        self->_player->begin();
+    }
+
+    self->_please_update = true;
+}
+
+
+FsFile* MalkuthAudio::file_to_stream_callback(const char* path, FsFile& old_file) {
+    if (!_instance) return nullptr;
+    return _instance->file_to_stream(path, old_file);
 }
 
 
@@ -422,10 +511,6 @@ AudioMetadata MalkuthAudio::get_metadata(FsFile& file, const char* path){
     return metadata;
 }
 
-AudioMetadata MalkuthAudio::get_metadata(){
-    return _current_track;
-}
-
 void MalkuthAudio::reset(){
     _please_update = true;
     _i2s.resetBytesWritten();
@@ -436,131 +521,6 @@ void MalkuthAudio::reset(){
     _current_track.duration = 0;
 
     memset(_cover_path, sizeof(_cover_path), 0);
-}
-
-void MalkuthAudio::loop() {
-    _player->copy();
-}
-
-void MalkuthAudio::toggle(bool active) {
-  if (!active) {
-    _player->play();
-    _playing = true;
-  }
-  else {
-    _player->stop();
-    _playing = false;
-  }
-}
-
-void MalkuthAudio::toggle() {
-  if (!_playing) {
-    _player->play();
-    _playing = true;
-  }
-  else {
-    _player->stop();
-    _playing = false;
-  }
-}
-
-void MalkuthAudio::next() {
-    _player->next(); 
-}
-
-void MalkuthAudio::previous() {
-    _player->previous(); 
-}
-
-uint8_t MalkuthAudio::get_volume() {
-    return _volume;
-}
-
-bool MalkuthAudio::get_status(){
-    if (_player->isActive())
-        return true;
-    else
-        return false;
-}
-
-void MalkuthAudio::set_sdfs(SdFs& sd){
-    _sd = &sd;
-}
-
-void MalkuthAudio::set_volume(uint8_t percent){
-    if (percent > 100)
-        percent = 100;
-
-    _volume = percent;
-
-    float real_percent = percent / 100.0f;
-    _player->setVolume(real_percent);
-}
-
-void MalkuthAudio::process_directory(const char* path){
-    _player->stop();
-
-    _directory->flush();
-    _source->clear();
-
-    _audio_file = _sd->open(path, O_READ);
-    if (!_audio_file) {
-        return;
-    }
-
-    SdFile dir;
-    SdFile entry;
-    _image_type = ImageType::NONE;
-
-    dir.open(path);
-
-    while (entry.openNext(&dir, O_RDONLY)){
-        char filename[256];
-
-        entry.getName(filename, sizeof(filename));
-
-        String full_path = String(path) + String(filename);
-
-        process_albumcover(full_path);
-        entry.close();
-    }
-
-    dir.close();
-
-    _directory->setPrefix(path);
-    _audio_file.rewind();
-    _audio_file.ls(_directory, LS_R);
-    _audio_file.close();
-
-    if (!_player->begin()){
-      Serial.println("Player failed to start");
-      return;      
-    }
-    set_volume(_volume);
-}
-
-bool MalkuthAudio::get_update(){
-    return _please_update;
-}
-
-float MalkuthAudio::get_position(){
-    return _i2s.getAudioCurrentTime();
-}
-
-void MalkuthAudio::yeah_i_have_updated(){
-    _please_update = false;
-}
-
-char* MalkuthAudio::get_coverpath(){
-    return _cover_path;
-}
-
-ImageType MalkuthAudio::get_covertype(){
-    return _image_type;
-}
-
-bool MalkuthAudio::is_actually_audio(){
-    return (!_not_a_music);
 }
 
 void MalkuthAudio::process_albumcover(String path) {
@@ -590,4 +550,130 @@ void MalkuthAudio::process_albumcover(String path) {
         }
         return;
     }
+}
+
+///
+/// Public Function
+///
+
+bool MalkuthAudio::init(uint8_t pin_bck, uint8_t pin_ws, uint8_t pin_data){
+    _pin_bck  = pin_bck;
+    _pin_ws   = pin_ws;
+    _pin_data = pin_data;
+
+    _queue_audio = xQueueCreate(16, sizeof(AudioCommand));
+    _init_waiter = xTaskGetCurrentTaskHandle();
+
+
+    xTaskCreate(
+        task_audio,
+        "Malkuth_Audio",
+        24000,
+        this,
+        1,
+        &_task_audio
+    );
+
+    uint32_t notify = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
+    if (notify == 0) return false;
+
+    return _init_ok;
+}
+
+bool MalkuthAudio::init(uint8_t core, uint8_t pin_bck, uint8_t pin_ws, uint8_t pin_data){
+    _pin_bck  = pin_bck;
+    _pin_ws   = pin_ws;
+    _pin_data = pin_data;
+
+    _queue_audio = xQueueCreate(16, sizeof(AudioCommand));
+    _init_waiter = xTaskGetCurrentTaskHandle();
+
+    xTaskCreatePinnedToCore(
+        task_audio,
+        "Malkuth_Audio",
+        24000,
+        this,
+        1,
+        &_task_audio,
+        core
+    );
+
+    uint32_t notify = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
+    if (notify == 0) return false;
+
+    return _init_ok;
+}
+
+void MalkuthAudio::toggle() {
+    AudioCommand cmd{ .type = AudioCommandType::TOGGLE };
+    xQueueSend(_queue_audio, &cmd, 0);
+}
+
+void MalkuthAudio::toggle(bool active) {
+    AudioCommand cmd{ .type = active ? AudioCommandType::STOP
+                                     : AudioCommandType::PLAY };
+    xQueueSend(_queue_audio, &cmd, 0);
+}
+
+void MalkuthAudio::next() {
+    AudioCommand cmd{ .type = AudioCommandType::NEXT };
+    xQueueSend(_queue_audio, &cmd, 0);
+}
+
+void MalkuthAudio::previous() {
+    AudioCommand cmd{ .type = AudioCommandType::PREVIOUS };
+    xQueueSend(_queue_audio, &cmd, 0);
+}
+
+void MalkuthAudio::set_volume(uint8_t percent) {
+    AudioCommand cmd{ .type = AudioCommandType::SET_VOLUME };
+    cmd.payload.volume = percent;
+    xQueueSend(_queue_audio, &cmd, 0);
+}
+
+void MalkuthAudio::process_directory(const char* path) {
+    AudioCommand cmd{ .type = AudioCommandType::PROCESS_DIRECTORY };
+    strncpy(cmd.payload.path, path, sizeof(cmd.payload.path) - 1);
+    cmd.payload.path[sizeof(cmd.payload.path) - 1] = 0;
+    xQueueSend(_queue_audio, &cmd, 0);
+}
+
+float MalkuthAudio::get_position() {
+    return _i2s.getAudioCurrentTime();
+}
+
+bool MalkuthAudio::get_status() {
+    return _playing;
+}
+
+bool MalkuthAudio::is_actually_audio() {
+    return !_not_a_music;
+}
+
+bool MalkuthAudio::get_update() {
+    return _please_update;
+}
+
+void MalkuthAudio::yeah_i_have_updated() {
+    _please_update = false;
+}
+
+char* MalkuthAudio::get_coverpath() {
+    return _cover_path;
+}
+
+ImageType MalkuthAudio::get_covertype() {
+    return _image_type;
+}
+
+AudioMetadata MalkuthAudio::get_metadata() {
+    return _current_track;
+}
+
+uint8_t MalkuthAudio::get_volume() {
+    return _volume;
+}
+
+void MalkuthAudio::set_sdfs(SdFs& sd) {
+    _sd = &sd;
 }

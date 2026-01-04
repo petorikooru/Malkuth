@@ -5,19 +5,7 @@
 
 #include <SdFat.h>
 
-#include "TJpg_Decoder.h"
 #include "malkuth_helper.h"
-
-#include "fonts/Koruri-Regular24.h"
-#include "fonts/Koruri-Regular18.h"
-#include "fonts/Koruri-Regular12.h"
-#include "fonts/Koruri-Regular8.h"
-
-#include "flash_images/BootBg.h"
-#include "flash_images/PlayerBg_a.h"
-#include "flash_images/PlayerBg_b.h"
-#include "flash_images/PlayerBg_c.h"
-#include "flash_images/PlayerBg_d.h"
 
 #ifndef MAX_IMAGE_WIDTH
     #define MAX_IMAGE_WIDTH 320
@@ -25,10 +13,6 @@
 
 #ifndef MAX_TEXT_LENGTH
     #define MAX_TEXT_LENGTH 128
-#endif
-
-#ifndef FONT
-    #define FONT Koruri_Regular24
 #endif
 
 #ifndef PIN_BL
@@ -40,7 +24,6 @@ enum class DisplayType : uint8_t {
     TEXT,
     OBJECT,
     BAR,
-    SCROLL,
 
     CLEAR
 };
@@ -118,13 +101,12 @@ struct Button {
     void*                       param;
 };
 
-
-struct JpgState {
-    int16_t dst_x;
-    int16_t dst_y;
-    uint16_t dst_w;
-    uint16_t dst_h;
-};
+// struct JpgState {
+//     int16_t dst_x;
+//     int16_t dst_y;
+//     uint16_t dst_w;
+//     uint16_t dst_h;
+// };
 
 class MalkuthDisplay {
 private:
@@ -132,19 +114,10 @@ private:
     FT6236   _ts    = FT6236();
     PNG      _png;
     SdFs*    _sd;
-    TJpg_Decoder _jpg;
-
-    static JpgState         _jpg_state;
-    static MalkuthDisplay*  _jpg_self;  // sadly it doesnt pass the pointer so we have to create it ourself
-    
-    uint8_t* _font = const_cast<uint8_t*>(FONT);
+    // TJpg_Decoder _jpg;
 
     uint8_t  _brightness = 50;
-    uint8_t  _volume = 20;
 
-    uint8_t _timeout = 3;
-    bool    _overlay;
-    
     int16_t  _pos_x;
     int16_t  _pos_y;
 
@@ -164,10 +137,13 @@ private:
 
     static void handle_command(MalkuthDisplay* self, const DisplayCommand& cmd);
 
+    int16_t calculate_anchor_x(Anchor anchor, uint16_t width);
+    int16_t calculate_anchor_y(Anchor anchor, uint16_t height);
+
     static void draw_png_flash(MalkuthDisplay *self, const DisplayCommand&cmd);
-    static void draw_jpg(MalkuthDisplay *self, const DisplayCommand&cmd);
+    // static void draw_jpg(MalkuthDisplay *self, const DisplayCommand&cmd);
     
-    static bool render_jpg(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap);
+    // static bool render_jpg(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap);
     static int  render_png(PNGDRAW* png_draw);
     
     static void draw_image(MalkuthDisplay* self, const DisplayCommand& cmd);
@@ -182,9 +158,9 @@ public:
          init(const uint8_t core);
 
     void image(
-            ImageType   type, 
-            const uint8_t* image, 
-            size_t      data_size
+            ImageType       type, 
+            const uint8_t*  image, 
+            size_t          data_size
     ),   image(
             ImageType   type,
             const char* path,
@@ -193,7 +169,6 @@ public:
             const int16_t offset_x, const int16_t offset_y
     );
 
-    
     void text(
             Anchor anchor, bool transparent,
             const char* string, const uint8_t* typeface,

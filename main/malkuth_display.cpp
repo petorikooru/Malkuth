@@ -5,25 +5,21 @@
 /// Private Function
 ///
 
-extern TJpg_Decoder TJpgDec;
-MalkuthDisplay* MalkuthDisplay::_jpg_self = nullptr;
-JpgState MalkuthDisplay::_jpg_state;
-
 void MalkuthDisplay::task_display(void* parameters) {
-  MalkuthDisplay* self = static_cast<MalkuthDisplay*>(parameters);
-  DisplayCommand cmd;
+    MalkuthDisplay* self = static_cast<MalkuthDisplay*>(parameters);
+    DisplayCommand cmd;
 
-  self->_tft.init();
-  self->_tft.setRotation(0);
-  self->_tft.setAttribute(UTF8_SWITCH, true);
-  self->_tft.setAttribute(PSRAM_ENABLE, true);
-  self->set_brightness(self->_brightness);
-  self->_ts_exist = self->_ts.begin(40, 16, 15);
+    self->_tft.init();
+    self->_tft.setRotation(0);
+    self->_tft.setAttribute(UTF8_SWITCH, true);
+    self->_tft.setAttribute(PSRAM_ENABLE, true);
+    self->set_brightness(self->_brightness);
+    self->_ts_exist = self->_ts.begin(40, 16, 15);
 
-  while (true) {
-    xQueueReceive(self->_queue_display, &cmd, portMAX_DELAY);
-    self->handle_command(self, cmd);
-  }
+    while (true) {
+        xQueueReceive(self->_queue_display, &cmd, portMAX_DELAY);
+        self->handle_command(self, cmd);
+    }
 }
 
 void MalkuthDisplay::handle_command(MalkuthDisplay* self, const DisplayCommand& cmd) {
@@ -46,6 +42,48 @@ void MalkuthDisplay::handle_command(MalkuthDisplay* self, const DisplayCommand& 
   }
 }
 
+int16_t MalkuthDisplay::calculate_anchor_x(Anchor anchor, uint16_t width){
+    switch (anchor) {
+        case Anchor::TOP_LEFT:
+        case Anchor::MIDDLE_LEFT:
+        case Anchor::BOTTOM_LEFT:
+            return 0;
+        case Anchor::TOP_CENTER:
+        case Anchor::MIDDLE_CENTER:
+        case Anchor::BOTTOM_CENTER:
+            return (
+                (_tft.width() / 2) - (width / 2)
+            );
+        case Anchor::TOP_RIGHT:
+        case Anchor::MIDDLE_RIGHT:
+        case Anchor::BOTTOM_RIGHT:
+            return (
+                _tft.width() - width
+            );
+    }
+}
+
+int16_t MalkuthDisplay::calculate_anchor_y(Anchor anchor, uint16_t height){
+    switch (anchor) {
+        case Anchor::TOP_LEFT:
+        case Anchor::TOP_CENTER:
+        case Anchor::TOP_RIGHT:
+            return 0;
+        case Anchor::MIDDLE_LEFT:
+        case Anchor::MIDDLE_CENTER:
+        case Anchor::MIDDLE_RIGHT:
+            return (
+                (_tft.height() / 2) - (height / 2)
+            );
+        case Anchor::BOTTOM_LEFT:
+        case Anchor::BOTTOM_CENTER:
+        case Anchor::BOTTOM_RIGHT:
+            return (
+                _tft.height() - height
+            );
+    }
+}
+
 void MalkuthDisplay::draw_image(MalkuthDisplay* self, const DisplayCommand& cmd) {
     switch (cmd.payload.image.type) {
         case ImageType::FLASH:
@@ -57,7 +95,8 @@ void MalkuthDisplay::draw_image(MalkuthDisplay* self, const DisplayCommand& cmd)
             break;
             
         case ImageType::JPG:
-            draw_jpg(self, cmd);
+            TODO("Render JPG from sd card");
+            // draw_jpg(self, cmd);
             break;
     }
 }
@@ -73,36 +112,36 @@ void MalkuthDisplay::draw_png_flash(MalkuthDisplay *self, const DisplayCommand&c
     }
 }
 
-void MalkuthDisplay::draw_jpg(MalkuthDisplay *self, const DisplayCommand&cmd){
-    const auto& img = cmd.payload.image;
+// void MalkuthDisplay::draw_jpg(MalkuthDisplay *self, const DisplayCommand&cmd){
+//     const auto& img = cmd.payload.image;
 
-    _jpg_self = self;
-    FsFile _file = self->_sd->open(img.path, O_READ);
+//     _jpg_self = self;
+//     FsFile _file = self->_sd->open(img.path, O_READ);
 
-    self->_jpg_state.dst_x = img.offset_x;
-    self->_jpg_state.dst_y = img.offset_y;
-    self->_jpg_state.dst_w = img.size_x;
-    self->_jpg_state.dst_h = img.size_y;
+//     self->_jpg_state.dst_x = img.offset_x;
+//     self->_jpg_state.dst_y = img.offset_y;
+//     self->_jpg_state.dst_w = img.size_x;
+//     self->_jpg_state.dst_h = img.size_y;
 
-    self->_jpg.setCallback(render_jpg);
+//     self->_jpg.setCallback(render_jpg);
 
-    // Pick closest scale
-    uint8_t scale = 1;
-    uint16_t w, h;
-;
-    self->_jpg.getJpgSize(&w, &h, _file);
+//     // Pick closest scale
+//     uint8_t scale = 1;
+//     uint16_t w, h;
+// ;
+//     self->_jpg.getJpgSize(&w, &h, _file);
 
-    Serial.printf("width = %d, height = %d\n", w, h);
+//     Serial.printf("width = %d, height = %d\n", w, h);
 
-    if (w > img.size_x * 4) scale = 4;
-    else if (w > img.size_x * 2) scale = 2;
+//     if (w > img.size_x * 4) scale = 4;
+//     else if (w > img.size_x * 2) scale = 2;
 
-    self->_jpg.setJpgScale(scale);
+//     self->_jpg.setJpgScale(scale);
 
-    self->_tft.startWrite();
-    self->_jpg.drawJpg(0, 0, _file);
-    self->_tft.endWrite();
-}
+//     self->_tft.startWrite();
+//     self->_jpg.drawJpg(0, 0, _file);
+//     self->_tft.endWrite();
+// }
 
 void MalkuthDisplay::draw_text(MalkuthDisplay* self, const DisplayCommand& cmd) {
   const auto& txt = cmd.payload.text;
@@ -136,47 +175,8 @@ void MalkuthDisplay::draw_text(MalkuthDisplay* self, const DisplayCommand& cmd) 
   
   spr.drawString(txt.string, sprite_w / 2, sprite_h / 2);
 
-  int16_t dest_x = txt.offset_x;
-  int16_t dest_y = txt.offset_y;
-
-  int16_t offset_x = 0;
-  int16_t offset_y = 0;
-
-  switch (txt.anchor) {
-    case Anchor::TOP_LEFT:
-      break;
-    case Anchor::TOP_CENTER:
-      offset_x = (self->_tft.width() / 2) - (sprite_w / 2);
-      break;
-    case Anchor::TOP_RIGHT:
-      offset_x = self->_tft.width() - (sprite_w);
-      break;
-    case Anchor::MIDDLE_LEFT:
-      offset_y = (self->_tft.height() / 2) - (sprite_h / 2);
-      break;
-    case Anchor::MIDDLE_CENTER:
-      offset_x = (self->_tft.width() / 2) - (sprite_w / 2);
-      offset_y = (self->_tft.height() / 2) - (sprite_h / 2);
-      break;
-    case Anchor::MIDDLE_RIGHT:
-      offset_x = self->_tft.width() - (sprite_w);
-      offset_y = (self->_tft.height() / 2) - (sprite_h / 2);
-      break;
-    case Anchor::BOTTOM_LEFT:
-      offset_y = self->_tft.height() - (sprite_h);
-      break;
-    case Anchor::BOTTOM_CENTER:
-      offset_x = (self->_tft.width() / 2) - (sprite_w / 2);
-      offset_y = self->_tft.height() - (sprite_h);
-      break;
-    case Anchor::BOTTOM_RIGHT:
-      offset_x = self->_tft.width() - (sprite_w);
-      offset_y = self->_tft.height() - (sprite_h);
-      break;
-  }
-
-  dest_x += offset_x;
-  dest_y += offset_y;
+  int16_t dest_x = txt.offset_x + self->calculate_anchor_x(txt.anchor, sprite_w);
+  int16_t dest_y = txt.offset_y + self->calculate_anchor_y(txt.anchor, sprite_h);;
 
   if (!txt.transparent)
     spr.pushSprite(dest_x, dest_y, self->_bg_color);
@@ -206,47 +206,8 @@ void MalkuthDisplay::draw_object(MalkuthDisplay* self, const DisplayCommand& cmd
     radius = std::min(obj.size_x, sprite_h) / 2;
   }
 
-  int16_t dest_x = obj.offset_x;
-  int16_t dest_y = obj.offset_y;
-
-  int16_t offset_x = 0;
-  int16_t offset_y = 0;
-
-  switch (cmd.payload.object.anchor) {
-    case Anchor::TOP_LEFT:
-      break;
-    case Anchor::TOP_CENTER:
-      offset_x = (self->_tft.width() / 2) - (sprite_w / 2);
-      break;
-    case Anchor::TOP_RIGHT:
-      offset_x = self->_tft.width() - (sprite_w);
-      break;
-    case Anchor::MIDDLE_LEFT:
-      offset_y = (self->_tft.height() / 2) - (sprite_h / 2);
-      break;
-    case Anchor::MIDDLE_CENTER:
-      offset_x = (self->_tft.width() / 2) - (sprite_w / 2);
-      offset_y = (self->_tft.height() / 2) - (sprite_h / 2);
-      break;
-    case Anchor::MIDDLE_RIGHT:
-      offset_x = self->_tft.width() - (sprite_w);
-      offset_y = (self->_tft.height() / 2) - (sprite_h / 2);
-      break;
-    case Anchor::BOTTOM_LEFT:
-      offset_y = self->_tft.height() - (sprite_h);
-      break;
-    case Anchor::BOTTOM_CENTER:
-      offset_x = (self->_tft.width() / 2) - (sprite_w / 2);
-      offset_y = self->_tft.height() - (sprite_h);
-      break;
-    case Anchor::BOTTOM_RIGHT:
-      offset_x = self->_tft.width() - (sprite_w);
-      offset_y = self->_tft.height() - (sprite_h);
-      break;
-  }
-
-  dest_x += offset_x;
-  dest_y += offset_y;
+  int16_t dest_x = obj.offset_x + self->calculate_anchor_x(obj.anchor, sprite_w);
+  int16_t dest_y = obj.offset_y + self->calculate_anchor_y(obj.anchor, sprite_h);;
 
   tft.fillRoundRect(dest_x, dest_y, sprite_w, sprite_h, radius, obj.color);
 }
@@ -266,70 +227,60 @@ int MalkuthDisplay::render_png(PNGDRAW* png_draw) {
   MalkuthDisplay* self = static_cast<MalkuthDisplay*>(png_draw->pUser);
   uint16_t line_buffer[MAX_IMAGE_WIDTH];
 
-  self->_png.getLineAsRGB565(
-    png_draw,
-    line_buffer,
-    PNG_RGB565_BIG_ENDIAN,
-    0xffffffff);
-
-  self->_tft.pushImage(
-    0,
-    png_draw->y,
-    png_draw->iWidth,
-    1,
-    line_buffer);
+  self->_png.getLineAsRGB565(png_draw, line_buffer, PNG_RGB565_BIG_ENDIAN, 0xffffffff);
+  self->_tft.pushImage(0, png_draw->y, png_draw->iWidth, 1, line_buffer);
 
   return 1;
 }
 
-bool MalkuthDisplay::render_jpg(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
-    if (!_jpg_self) return false;
+// bool MalkuthDisplay::render_jpg(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+//     if (!_jpg_self) return false;
 
-    auto& s = _jpg_self->_jpg_state;
+//     auto& s = _jpg_self->_jpg_state;
 
-    // Offset shift
-    int16_t draw_x = s.dst_x + x;
-    int16_t draw_y = s.dst_y + y;
+//     // Offset shift
+//     int16_t draw_x = s.dst_x + x;
+//     int16_t draw_y = s.dst_y + y;
 
-    // Clipping
-    int16_t clip_x2 = s.dst_x + s.dst_w;
-    int16_t clip_y2 = s.dst_y + s.dst_h;
+//     // Clipping
+//     int16_t clip_x2 = s.dst_x + s.dst_w;
+//     int16_t clip_y2 = s.dst_y + s.dst_h;
 
-    // If completely outside
-    if (draw_x >= clip_x2 || draw_y >= clip_y2) return true;
-    if (draw_x + w <= s.dst_x || draw_y + h <= s.dst_y) return true;
+//     // If completely outside
+//     if (draw_x >= clip_x2 || draw_y >= clip_y2) return true;
+//     if (draw_x + w <= s.dst_x || draw_y + h <= s.dst_y) return true;
 
-    // Partial clipping
-    int16_t skip_x = 0;
-    int16_t skip_y = 0;
+//     // Partial clipping
+//     int16_t skip_x = 0;
+//     int16_t skip_y = 0;
 
-    if (draw_x < s.dst_x) {
-        skip_x = s.dst_x - draw_x;
-        draw_x = s.dst_x;
-        w -= skip_x;
-    }
+//     if (draw_x < s.dst_x) {
+//         skip_x = s.dst_x - draw_x;
+//         draw_x = s.dst_x;
+//         w -= skip_x;
+//     }
 
-    if (draw_y < s.dst_y) {
-        skip_y = s.dst_y - draw_y;
-        draw_y = s.dst_y;
-        h -= skip_y;
-    }
+//     if (draw_y < s.dst_y) {
+//         skip_y = s.dst_y - draw_y;
+//         draw_y = s.dst_y;
+//         h -= skip_y;
+//     }
 
-    if (draw_x + w > clip_x2) w = clip_x2 - draw_x;
-    if (draw_y + h > clip_y2) h = clip_y2 - draw_y;
+//     if (draw_x + w > clip_x2) w = clip_x2 - draw_x;
+//     if (draw_y + h > clip_y2) h = clip_y2 - draw_y;
 
-    if (w == 0 || h == 0) return true;
+//     if (w == 0 || h == 0) return true;
 
-    _jpg_self->_tft.pushImage(
-        draw_x,
-        draw_y,
-        w,
-        h,
-        bitmap + skip_y * w + skip_x
-    );
+//     _jpg_self->_tft.pushImage(
+//         draw_x,
+//         draw_y,
+//         w,
+//         h,
+//         bitmap + skip_y * w + skip_x
+//     );
 
-    return 1;
-}
+//     return 1;
+// }
 
 void MalkuthDisplay::set_brightness(uint8_t percent) {
   if (percent > 100)
@@ -382,44 +333,12 @@ void MalkuthDisplay::button(
 ){
     uint16_t width = size_x;
     uint16_t height = size_y;
-    int16_t x = offset_x;
-    int16_t y = offset_y;
 
-    if (width > _tft.width()) width = _tft.width();
-    if (height > _tft.height()) height = _tft.height();
+    if (width > _tft.width())   width   = _tft.width();
+    if (height > _tft.height()) height  = _tft.height();
 
-    switch (anchor) {
-        case Anchor::TOP_LEFT:
-            break;
-        case Anchor::TOP_CENTER:
-            x += (_tft.width() / 2) - (width / 2);
-            break;
-        case Anchor::TOP_RIGHT:
-            x += _tft.width() - (width);
-            break;
-        case Anchor::MIDDLE_LEFT:
-            y += (_tft.height() / 2) - (height / 2);
-            break;
-        case Anchor::MIDDLE_CENTER:
-            x += (_tft.width() / 2) - (width / 2);
-            y += (_tft.height() / 2) - (height / 2);
-            break;
-        case Anchor::MIDDLE_RIGHT:
-            x += _tft.width() - (width);
-            y += (_tft.height() / 2) - (height / 2);
-            break;
-        case Anchor::BOTTOM_LEFT:
-            y += _tft.height() - (height);
-            break;
-        case Anchor::BOTTOM_CENTER:
-            x += (_tft.width() / 2) - (width / 2);
-            y += _tft.height() - (height);
-            break;
-        case Anchor::BOTTOM_RIGHT:
-            x += _tft.width() - (width);
-            y += _tft.height() - (height);
-            break;
-    }
+    int16_t x = offset_x + calculate_anchor_x(anchor, width);
+    int16_t y = offset_y + calculate_anchor_y(anchor, height);
 
     object(anchor, size_x, size_y, color, roundness, offset_x, offset_y);
 
@@ -438,43 +357,12 @@ void MalkuthDisplay::button(
 ){
     uint16_t width = size_x;
     uint16_t height = size_y;
-    int16_t x = offset_x;
-    int16_t y = offset_y;
-    if (width > _tft.width()) width = _tft.width();
-    if (height > _tft.height()) height = _tft.height();
 
-    switch (anchor) {
-        case Anchor::TOP_LEFT:
-            break;
-        case Anchor::TOP_CENTER:
-            x += (_tft.width() / 2) - (width / 2);
-            break;
-        case Anchor::TOP_RIGHT:
-            x += _tft.width() - (width);
-            break;
-        case Anchor::MIDDLE_LEFT:
-            y += (_tft.height() / 2) - (height / 2);
-            break;
-        case Anchor::MIDDLE_CENTER:
-            x += (_tft.width() / 2) - (width / 2);
-            y += (_tft.height() / 2) - (height / 2);
-            break;
-        case Anchor::MIDDLE_RIGHT:
-            x += _tft.width() - (width);
-            y += (_tft.height() / 2) - (height / 2);
-            break;
-        case Anchor::BOTTOM_LEFT:
-            y += _tft.height() - (width);
-            break;
-        case Anchor::BOTTOM_CENTER:
-            x += (_tft.width() / 2) - (width / 2);
-            y += _tft.height() - (height);
-            break;
-        case Anchor::BOTTOM_RIGHT:
-            x += _tft.width() - (width);
-            y += _tft.height() - (height);
-            break;
-    }
+    if (width > _tft.width())   width   = _tft.width();
+    if (height > _tft.height()) height  = _tft.height();
+
+    int16_t x = offset_x + calculate_anchor_x(anchor, width);
+    int16_t y = offset_y + calculate_anchor_y(anchor, height);
 
     _buttons.push_back({ 
         x, y,
@@ -489,28 +377,20 @@ void MalkuthDisplay::_buttons_check() {
   TS_Point p = _ts.getPoint();
   if (p.z == 0) return;
 
-  uint16_t tx = p.x;
-  uint16_t ty = p.y;
-
   for (const auto& btn : _buttons) {
-    int16_t btn_x = btn.offset_x;
-    int16_t btn_y = btn.offset_y;
-    uint16_t btn_w = btn.size_x;
-    uint16_t btn_h = btn.size_y;
-
-    if (tx >= btn_x && 
-        tx < btn_x + btn_w && 
-        ty >= btn_y && 
-        ty < btn_y + btn_h) {
+    if (p.x >= btn.offset_x && 
+        p.x <  btn.offset_x + btn.size_x && 
+        p.y >= btn.offset_y && 
+        p.y < btn.offset_y + btn.size_y)
+    {
       if (btn.func) {
         btn.func(btn.param);
-        vTaskDelay(300 / portTICK_PERIOD_MS);
+        vTaskDelay(150 / portTICK_PERIOD_MS);
         return;
       }
     }
   }
-
-  vTaskDelay(100 / portTICK_PERIOD_MS);
+  vTaskDelay(33 / portTICK_PERIOD_MS); // 30 fps
 }
 
 void MalkuthDisplay::text(
@@ -570,15 +450,15 @@ void MalkuthDisplay::image(
     DisplayCommand cmd = {
       .type = DisplayType::IMAGE,
       .payload = { .image = {
-                     .type = type,
-                     .data_size = data_size,
-                     .data = image,
-                     .path = NULL,
-                     .size_x = 0,
-                     .size_y = 0,
-                     .offset_x = 0,
-                     .offset_y = 0,
-                   } }
+        .type = type,
+        .data_size = data_size,
+        .data = image,
+        .path = NULL,
+        .size_x = 0,
+        .size_y = 0,
+        .offset_x = 0,
+        .offset_y = 0,
+      }}
     };
 
     xQueueSend(_queue_display, &cmd, 50);
@@ -618,14 +498,14 @@ void MalkuthDisplay::object(
     DisplayCommand cmd = {
       .type = DisplayType::OBJECT,
       .payload = { .object = {
-                     .offset_x = 0,
-                     .offset_y = 0,
-                     .size_x = size_x,
-                     .size_y = size_y,
-                     .color = color,
-                     .roundness = roundness,
-                     .anchor = anchor,
-                   } }
+        .offset_x = 0,
+        .offset_y = 0,
+        .size_x = size_x,
+        .size_y = size_y,
+        .color = color,
+        .roundness = roundness,
+        .anchor = anchor,
+      }}
     };
 
     xQueueSend(_queue_display, &cmd, 50);
@@ -639,14 +519,14 @@ void MalkuthDisplay::object(
     DisplayCommand cmd = {
       .type = DisplayType::OBJECT,
       .payload = { .object = {
-                     .offset_x = offset_x,
-                     .offset_y = offset_y,
-                     .size_x = size_x,
-                     .size_y = size_y,
-                     .color = color,
-                     .roundness = roundness,
-                     .anchor = anchor,
-                   } }
+        .offset_x = offset_x,
+        .offset_y = offset_y,
+        .size_x = size_x,
+        .size_y = size_y,
+        .color = color,
+        .roundness = roundness,
+        .anchor = anchor,
+      }}
     };
 
     xQueueSend(_queue_display, &cmd, 50);
@@ -667,44 +547,12 @@ void MalkuthDisplay::bar(
 ){
     uint16_t width = size_x;
     uint16_t height = size_y;
-    int16_t x = offset_x;
-    int16_t y = offset_y;
 
     if (width > _tft.width()) width = _tft.width();
     if (height > _tft.height()) height = _tft.height();
 
-    switch (anchor) {
-        case Anchor::TOP_LEFT:
-            break;
-        case Anchor::TOP_CENTER:
-            x += (_tft.width() / 2) - (width / 2);
-            break;
-        case Anchor::TOP_RIGHT:
-            x += _tft.width() - (width);
-            break;
-        case Anchor::MIDDLE_LEFT:
-            y += (_tft.height() / 2) - (height / 2);
-            break;
-        case Anchor::MIDDLE_CENTER:
-            x += (_tft.width() / 2) - (width / 2);
-            y += (_tft.height() / 2) - (height / 2);
-            break;
-        case Anchor::MIDDLE_RIGHT:
-            x += _tft.width() - (width);
-            y += (_tft.height() / 2) - (height / 2);
-            break;
-        case Anchor::BOTTOM_LEFT:
-            y += _tft.height() - (width);
-            break;
-        case Anchor::BOTTOM_CENTER:
-            x += (_tft.width() / 2) - (width / 2);
-            y += _tft.height() - (height);
-            break;
-        case Anchor::BOTTOM_RIGHT:
-            x += _tft.width() - (width);
-            y += _tft.height() - (height);
-            break;
-    }
+    int16_t x = offset_x + calculate_anchor_x(anchor, width);
+    int16_t y = offset_y + calculate_anchor_y(anchor, height);
 
     DisplayCommand cmd = {
         .type = DisplayType::BAR,

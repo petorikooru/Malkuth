@@ -18,6 +18,24 @@ typedef struct {
     float duration;
 } AudioMetadata;
 
+enum class AudioCommandType : uint8_t {
+    PLAY,
+    STOP,
+    TOGGLE,
+    NEXT,
+    PREVIOUS,
+    SET_VOLUME,
+    PROCESS_DIRECTORY,
+};
+
+struct AudioCommand {
+    AudioCommandType type;
+    union {
+        uint8_t volume;
+        char    path[128];
+    } payload;
+};
+
 class CustomI2S : public I2SStream {
 public:
   uint64_t bytes_written = 0;
@@ -38,21 +56,41 @@ public:
   }
 };
 
-
 class MalkuthAudio {
 private:
-    FsFile    _audio_file;
-    SdFs*     _sd;
-    bool      _playing;
-    uint8_t   _volume = 10;
-    static float     _current_duration;
+    QueueHandle_t _queue_audio = nullptr;
+    TaskHandle_t  _task_audio  = nullptr;    
+    TaskHandle_t  _init_waiter = nullptr;
+
+    bool _init_ok = false;
+
+    FsFile        _audio_file;
+    SdFs*         _sd         = nullptr;
+    bool          _playing    = false;
+    uint8_t       _volume     = 10;
+    float         _current_duration = 0.0f;
     
     // TODO :  Multiprocessing on Audio
     // BufferRTOS<uint8_t> buffer(1024 * 10);
     // QueueStream<uint8_t> queue(buffer);
 
+    enum class CoverPriority {
+        NONE        = 0,
+        COVER_PNG   = 1,
+        COVER_JPG   = 2,
+        SMALL_COVER = 3
+    };
+    CoverPriority _cover_priority = CoverPriority::NONE;
+    char          _cover_path[128] = {};
+    ImageType     _image_type;
+
+    uint8_t _pin_bck;
+    uint8_t _pin_ws;
+    uint8_t _pin_data;
+
     AudioSourceVector<FsFile>*  _source;
     AudioPlayer*                _player;
+    NamePrinter*                _directory;
 
     CustomI2S _i2s;
 
@@ -63,22 +101,15 @@ private:
     WAVDecoder        _decoder_wav;
 
     AudioMetadata  _current_track;
-    NamePrinter*   _directory;
 
     bool _please_update = false;
     bool _not_a_music   = false;
 
-    static MalkuthAudio* self;
+    static MalkuthAudio* _instance;
 
-    enum class CoverPriority {
-        NONE = 0,
-        COVER_PNG   = 1,
-        COVER_JPG   = 2,
-        SMALL_COVER = 3
-    };
-    CoverPriority _cover_priority = CoverPriority::NONE;
-    char      _cover_path[128] = {};
-    ImageType _image_type;
+    static void task_audio(void* parameters);
+    static void handle_command(MalkuthAudio* self, const AudioCommand& cmd);
+    static void process_directory_task(MalkuthAudio* self, const AudioCommand& cmd);
 
     static FsFile*  file_to_stream_callback(const char* path, FsFile& old_file);
     FsFile*         file_to_stream(const char* path, FsFile& old_file);
@@ -94,14 +125,16 @@ private:
 
     static AudioMetadata get_metadata_wav(FsFile& file);
 
+    void process_albumcover(String path);
+
 public:
     bool init(uint8_t pin_bck = 8, uint8_t pin_ws = 17, uint8_t pin_data = 18);
+    bool init(uint8_t core, uint8_t pin_bck = 8, uint8_t pin_ws = 17, uint8_t pin_data = 18);
     void reset();
   
     AudioMetadata get_metadata();
 
     void process_directory(const char* path);
-    void process_albumcover(String path);
 
     void set_sdfs(SdFs& sd);
     void set_volume(uint8_t percent);
