@@ -17,6 +17,9 @@
 #include "fonts/RelaxedTypingMonoJP-Regular.ttf18.h"
 #include "fonts/RelaxedTypingMonoJP-Regular.ttf24.h"
 
+#include "fonts/Icons.h"
+#include "fonts/IconsMenubar.h"
+
 #include "flash_images/BootBg.h"
 #include "flash_images/PlayerBg_a.h"
 #include "flash_images/PlayerBg_b.h"
@@ -50,18 +53,27 @@ namespace Theme {
 
     const uint8_t*  FONT_SMALL      = Koruri_Regular8;
     const uint8_t*  FONT_MEDIUM     = Koruri_Regular12;
-    // const uint8_t*  FONT_LARGE      = Koruri_Regular18;
-    // const uint8_t*  FONT_HUGE       = Koruri_Regular24;
-
-    // const uint8_t*  FONT_SMALL      = RelaxedTypingMonoJP_Regular8;
-    // const uint8_t*  FONT_MEDIUM     = RelaxedTypingMonoJP_Regular12;
     const uint8_t*  FONT_LARGE      = RelaxedTypingMonoJP_Regular18;
     const uint8_t*  FONT_HUGE       = RelaxedTypingMonoJP_Regular24;
-}
 
+    const uint8_t*  FONT_ICON_LARGE       = IconsMenubar;
+    const uint8_t*  FONT_ICON_SMALL       = Icons;
+
+    const uint8_t*      IMG_BOOT        = BootBg;
+    const uint8_t*      IMG_PLAYER      = PlayerBg_b;
+    constexpr size_t    IMG_BOOT_SIZE   = sizeof(BootBg);
+    constexpr size_t    IMG_PLAYER_SIZE = sizeof(PlayerBg_b);
+
+}
 ////////////////////////////////////////////////////////////////////
 //                        Global Variables                        //
 ////////////////////////////////////////////////////////////////////
+MalkuthDisplay  display;
+MalkuthFs       filesystem;
+MalkuthAudio    audio;
+
+AudioMetadata   metadata;
+
 enum class Page : uint8_t {
     NONE,
     BOOT_SCREEN,
@@ -70,22 +82,48 @@ enum class Page : uint8_t {
     SETTINGS,
 };
 
-static Page current_page            = Page::NONE;
-static char current_directory[128]  = "/";
-static char selected_directory[128] = {};
+Page    current_page = Page::NONE;
+uint8_t current_volume;
+uint8_t current_brightness;
 
-static char vol_buf[16]     = {};
-static char time_buf[12]    = {};
-static char notif_buf[64]   = {};
+char vol_buf[16]     = {};
+char time_buf[12]    = {};
+char notif_buf[64]   = {};
 
-static      uint32_t last_update    = 0;
-constexpr   uint32_t FRAME_RATE     = 1000; // 1 FPS
+// Update Rate
+constexpr uint32_t FRAME_RATE     = 1000; // 1 FPS
+uint32_t           last_update    = 0;
+uint32_t           last_update_notif = 0;
+uint32_t           now          = 0;
+uint32_t           now_notif    = 0;
 
-MalkuthDisplay  display;
-MalkuthFs       filesystem;
-MalkuthAudio    audio;
+// Player
+float       position = 0.0f;
+float       duration = 0.0f;
+uint8_t     progress = 0;
 
-AudioMetadata metadata;
+// Files
+char current_directory[128]  = "/";
+char selected_directory[128] = "";
+
+std::vector<String> files;
+uint8_t             previous_index      = 0;
+uint8_t             files_count         = 0;
+constexpr uint8_t   VISIBLE_ITEMS       = 5;
+constexpr size_t    MAX_VISIBLE_STRING  = 29;
+uint8_t             start_idx           = 0;
+uint8_t             end_idx             = 0;
+
+// Settings
+constexpr uint16_t SLIDER_WIDTH = 280;
+constexpr uint16_t SLIDER_HEIGHT = 20;
+
+// Tasks
+Task task_progress  = Task("Malkuth: Player Progress", 3000, 1, 0);
+Task task_split     = Task("Malkuth: Player", 8000, 1, 0);
+
+TimerHandle_t notif_timer = NULL;
+TimerHandle_t player_update_timer = NULL;
 ////////////////////////////////////////////////////////////////////
 //                        Function Prototype                      //
 ////////////////////////////////////////////////////////////////////
@@ -94,13 +132,14 @@ void page_boot();
 void page_settings();
 void page_player();
 void page_files();
-void page_files_widget(uint8_t start_idx);
+void page_files_listing(uint8_t index);
 
 void show_statusbar();
 void show_menubar(Page active);
 void show_notification(const char* text, uint16_t color, uint16_t delay_ms);
 
 void check_keypress();
+void check_update();
 
 void duration_format(char* time_str, float time);
 String elipsis_format(const String& text, uint8_t length);
@@ -128,16 +167,19 @@ void setup() {
         display.text(Anchor::BOTTOM_CENTER, false, "Audio is failed to be intialized!", Theme::FONT_SMALL, Theme::C_ERROR, 0, -30);
     else 
         display.text(Anchor::BOTTOM_CENTER, false, "Audio is successfully intialized!", Theme::FONT_SMALL, Theme::C_SUCCESS, 0, -30);
+
+    // Concurent / Parallel Task
+    task_progress.begin([&](){
+        check_update();
+        vTaskDelay(pdMS_TO_TICKS(FRAME_RATE));
+    });
 }
 
 void loop() {
-skip:
     audio.loop();
-
-    display.buttons_check();
-    keypress_check();
-
+    
     // Update the metadata in page player
+skip:
     if (audio.get_update()) {
         metadata = audio.get_metadata();
         audio.yeah_i_have_updated();
@@ -147,30 +189,19 @@ skip:
         }
 
         if (current_page == Page::PLAYER) {
-            page(Page::PLAYER, true);
+            display.image(ImageType::FLASH, Theme::IMG_PLAYER, Theme::IMG_PLAYER_SIZE, 320, 85, 0, 280);
+            display.text(Anchor::MIDDLE_CENTER, true, metadata.title.c_str(), Theme::FONT_HUGE, Theme::C_TEXT_PRIMARY, 0, 50);
+            display.text(Anchor::MIDDLE_CENTER, true, metadata.artist.c_str(), Theme::FONT_LARGE, Theme::C_TEXT_PRIMARY, 0, 80);
+
+            // Duration text
+            duration_format(time_buf, metadata.duration);
+            display.object(Anchor::BOTTOM_RIGHT, 30, 12, Theme::C_ACCENT_DARK, 5, -20, -113);
+            display.text(Anchor::BOTTOM_RIGHT, true, time_buf, Theme::FONT_SMALL, Theme::C_WHITE, -20, -110);
         }
     }
 
-    // The progress bar
-    if (current_page == Page::PLAYER && audio.get_status()) {
-        uint32_t now = millis();
-
-        if (now - last_update >= FRAME_RATE) {
-            last_update = now;
-            float position = audio.get_position();
-            float duration = metadata.duration;
-
-            if (duration > 0) {
-                uint8_t progress = constrain(static_cast<uint8_t>((position / duration) * 100), 0, 100);
-                
-                // Player UI Update
-                duration_format(time_buf, position);
-                display.bar(Anchor::BOTTOM_CENTER, 280, 10, Theme::C_CARD, Theme::C_ACCENT, 5, 0, -130, progress, nullptr);
-                display.object(Anchor::BOTTOM_LEFT, 30, 12, Theme::C_ACCENT_DARK, 5, 21, -113);
-                display.text(Anchor::BOTTOM_LEFT, true, time_buf, Theme::FONT_SMALL, Theme::C_WHITE, 20, -110);
-            }
-        }
-    }
+    display.check_buttons();
+    check_keypress();
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -201,14 +232,15 @@ void page(Page p, bool redraw) {
 //                           Page Boot                            //
 ////////////////////////////////////////////////////////////////////
 void page_boot() {
-    display.image(ImageType::FLASH, BootBg, sizeof(BootBg));
+    display.image(ImageType::FLASH, Theme::IMG_BOOT, Theme::IMG_BOOT_SIZE);
     display.text(Anchor::TOP_CENTER,    true, "おかえり~~~ :3",       Theme::FONT_HUGE,  Theme::C_BG, 0, 20);
-    display.text(Anchor::BOTTOM_CENTER, true, " > Touch to start <", Theme::FONT_LARGE, Theme::C_TEXT_PRIMARY, 0, -60);
+    display.text(Anchor::BOTTOM_CENTER, true, " > Touch to start <", Theme::FONT_HUGE, Theme::C_TEXT_PRIMARY, 0, -60);
  
     display.button(Anchor::MIDDLE_CENTER, 320, 480, 0, 0, [](void*) {
         page(Page::PLAYER);
     });
 }
+
 ////////////////////////////////////////////////////////////////////
 //                           Page Player                          //
 ////////////////////////////////////////////////////////////////////
@@ -221,7 +253,8 @@ void page_player() {
     // else
     //     display.image(audio.get_covertype(), audio.get_coverpath(), 200, 200, 60, 40);
 
-    display.image(ImageType::FLASH, PlayerBg_b, sizeof(PlayerBg_b));
+    display.image(ImageType::FLASH, Theme::IMG_PLAYER, Theme::IMG_PLAYER_SIZE);
+
     show_statusbar();
     show_menubar(current_page);
 
@@ -236,20 +269,19 @@ void page_player() {
 
     // Button for Play/Pause
     display.button(Anchor::BOTTOM_CENTER, 35, 35, Theme::C_ACCENT_MUTED, -1, 0, -80, [](void*){
-        audio.toggle();
-        show_notification(audio.get_status() ? "Playing..." : "Paused...", Theme::C_TEXT_PRIMARY, 500);
+        audio.toggle();        
         display.object(Anchor::BOTTOM_CENTER, 35, 35, Theme::C_ACCENT_MUTED, -1, 0, -80);
         display.text(Anchor::BOTTOM_CENTER, true, 
             audio.get_status() ? "||" : "▶", 
             Theme::FONT_LARGE, Theme::C_WHITE, 
-            audio.get_status() ? -2 : 2, 
+            audio.get_status() ? -1 : 2, 
             audio.get_status() ? -85 : -82
         );
     });
     display.text(Anchor::BOTTOM_CENTER, true, 
             audio.get_status() ? "||" : "▶", 
             Theme::FONT_LARGE, Theme::C_WHITE, 
-            audio.get_status() ? -2 : 2, 
+            audio.get_status() ? -1 : 2, 
             audio.get_status() ? -85 : -82
     );
 
@@ -272,25 +304,34 @@ void page_player() {
     }
 }
 
-void page_files() {
-    page_files_widget(0);
+void check_update(){
+    // The progress bar
+    if (current_page != Page::PLAYER)
+        return;
+
+    if (!audio.get_status())
+        return;
+
+    duration = metadata.duration;
+    if (duration <= 0)
+        return;
+
+    position = audio.get_position();
+    progress = constrain(static_cast<uint8_t>((position / duration) * 100), 0, 100);
+        
+    // Player UI Update
+    duration_format(time_buf, position);
+    display.bar(Anchor::BOTTOM_CENTER, 280, 10, Theme::C_CARD, Theme::C_ACCENT, 5, 0, -130, progress, nullptr);
+    display.object(Anchor::BOTTOM_LEFT, 30, 12, Theme::C_ACCENT_DARK, 5, 21, -113);
+    display.text(Anchor::BOTTOM_LEFT, true, time_buf, Theme::FONT_SMALL, Theme::C_WHITE, 20, -110);
 }
 
-void page_files_widget(uint8_t start_idx) {
-    display.buttons_clear();
-    
-    display.object(Anchor::TOP_CENTER, 320, 380, TFT_BLACK, 0, 0, 40);
-    display.text(Anchor::TOP_LEFT, true, "File Chooser", Theme::FONT_HUGE, Theme::C_WHITE, 10, 40);
-    show_menubar(Page::FILES);
-
-    std::vector<String> files = filesystem.get_directory_files(current_directory);
-    uint8_t files_count = files.size();
-    constexpr uint8_t VISIBLE_ITEMS = 5;
-    constexpr size_t MAX_VISIBLE_STRING = 32;
-
-    uint8_t end_idx = start_idx + VISIBLE_ITEMS;
-    if (end_idx > files_count) 
-        end_idx = files_count;
+////////////////////////////////////////////////////////////////////
+//                           Page Files                          //
+////////////////////////////////////////////////////////////////////
+void page_files() {
+    display.text(Anchor::TOP_LEFT, true, "", Theme::FONT_ICON_LARGE, Theme::C_WHITE, 10, 35);
+    display.text(Anchor::TOP_LEFT, true, "File Chooser", Theme::FONT_HUGE, Theme::C_WHITE, 40, 38);
 
     // Previous dir button
     display.button(Anchor::TOP_CENTER, 300, 40, Theme::C_TEXT_MUTED, 10, 0, 75, [start_idx, &files](void*) {
@@ -302,10 +343,31 @@ void page_files_widget(uint8_t start_idx) {
                     break;
                 }
             }
-            page_files_widget(0);
+            page_files_listing(previous_index);
         }
     });
-    display.text(Anchor::TOP_LEFT, true, "← Previous Directory", Theme::FONT_LARGE, Theme::C_BG, 20, 84);
+    display.text(Anchor::TOP_LEFT, true, "←   Previous Directory", Theme::FONT_LARGE, Theme::C_BG, 20, 84);
+
+    // Directory Listing
+    page_files_listing(0);
+}
+
+void page_files_listing(uint8_t index) {
+    display.buttons_clear_temp();
+
+    // Refresh the view 
+    display.object(Anchor::TOP_CENTER, 320, 240, TFT_BLACK, 0, 0, 120);
+    display.object(Anchor::BOTTOM_RIGHT, 30, 30, Theme::C_BLACK, -1, -60, -80);
+    display.object(Anchor::BOTTOM_RIGHT, 30, 30, Theme::C_BLACK, -1, -20, -80);
+
+    files       = filesystem.get_directory_files(current_directory);
+    files_count = files.size();
+
+    start_idx   = index;
+    end_idx     = start_idx + VISIBLE_ITEMS;
+
+    if (end_idx > files_count) 
+        end_idx = files_count;
 
     // List files and directory
     for (uint8_t i = 0; i < VISIBLE_ITEMS; ++i) {
@@ -320,72 +382,97 @@ void page_files_widget(uint8_t start_idx) {
         display.button(Anchor::TOP_CENTER, 300, 40, 0, y_offset, [file, start_idx](void*) {
             if (file.endsWith("/")) {
                 strncat(current_directory, file.c_str(), sizeof(current_directory) - strlen(current_directory) - 1);
-                page_files_widget(0);
+                previous_index = start_idx;
+                page_files_listing(0);
             }
-        });
-        display.text(Anchor::TOP_LEFT, true, displayed_text.c_str(), Theme::FONT_LARGE, Theme::C_TEXT_PRIMARY, 20, 84 + (i + 1) * 44);
+        }, nullptr, true);
+        if (file.endsWith(".flac") && file.endsWith(".wav") && file.endsWith(".mp3") && file.endsWith(".aac"))
+            display.text(Anchor::TOP_LEFT, true, "", Theme::FONT_ICON_SMALL, Theme::C_TEXT_PRIMARY, 20, 84 + (i + 1) * 44); // Audio Icon
+        else if (file.endsWith(".png") && file.endsWith(".jpg") && file.endsWith(".jpeg"))
+            display.text(Anchor::TOP_LEFT, true, "", Theme::FONT_ICON_SMALL, Theme::C_TEXT_PRIMARY, 20, 84 + (i + 1) * 44); // Image Icon
+        else if (file.endsWith("/"))
+            display.text(Anchor::TOP_LEFT, true, "", Theme::FONT_ICON_SMALL, Theme::C_TEXT_PRIMARY, 20, 84 + (i + 1) * 44); // Folder Icon
+        else
+            display.text(Anchor::TOP_LEFT, true, "", Theme::FONT_ICON_SMALL, Theme::C_TEXT_PRIMARY, 20, 84 + (i + 1) * 44); // File Icon
+
+        display.text(Anchor::TOP_LEFT, true, displayed_text.c_str(), Theme::FONT_LARGE, Theme::C_TEXT_PRIMARY, 40, 84 + (i + 1) * 44);
+    }
+    display.text(Anchor::BOTTOM_LEFT, true, current_directory, Theme::FONT_SMALL, Theme::C_TEXT_MUTED, 0, -120);
+
+    // Select the directory
+    bool selected = (strcmp(selected_directory, current_directory) == 0);
+    display.button(Anchor::BOTTOM_LEFT, 85, 30, selected ? Theme::C_ACCENT : Theme::C_ACCENT_DARK, 10, 20, -80, [&selected](void*) {
+        strcpy(selected_directory, current_directory);
+        audio.process_directory(selected_directory);
+
+        display.button(Anchor::BOTTOM_LEFT, 85, 30, Theme::C_ACCENT, 10, 20, -80, nullptr);
+        display.text(Anchor::BOTTOM_LEFT, true, "Select", Theme::FONT_LARGE, selected ? Theme::C_BG : Theme::C_TEXT_MUTED, 33, -81);
+    }, nullptr, true);
+    display.text(Anchor::BOTTOM_LEFT, true, "Select", Theme::FONT_LARGE, selected ? Theme::C_BG : Theme::C_TEXT_MUTED, 33, -81);
+
+    // Return to the selected directory
+    if ((!(strcmp(selected_directory, "") == 0)) && (!(strcmp(selected_directory, current_directory) == 0))) {
+        display.button(Anchor::BOTTOM_CENTER, 85, 30, Theme::C_ACCENT_DARK, 10, 0, -80, [&selected](void*) {
+            strcpy(current_directory, selected_directory);
+            page_files_listing(0);
+        }, nullptr, true);
+        display.text(Anchor::BOTTOM_CENTER, true, "Now", Theme::FONT_LARGE, Theme::C_TEXT_MUTED, 0, -81);
     }
 
     // Scroll up
     if (start_idx > 0) {
         display.button(Anchor::BOTTOM_RIGHT, 30, 30, Theme::C_TEXT_MUTED, -1, -60, -80, [start_idx](void*) {
-            page_files_widget(start_idx - 1);
-        });
+            page_files_listing(start_idx - 1);
+        }, nullptr, true);
         display.text(Anchor::BOTTOM_RIGHT, true, "▲", Theme::FONT_LARGE, Theme::C_BLACK, -63, -80);
     }
 
     // Scroll down
     if (end_idx < files_count) {
         display.button(Anchor::BOTTOM_RIGHT, 30, 30, Theme::C_TEXT_MUTED, -1, -20, -80, [start_idx](void*) {
-            page_files_widget(start_idx + 1);
-        });
+            page_files_listing(start_idx + 1);
+        }, nullptr, true);
         display.text(Anchor::BOTTOM_RIGHT, true, "▼", Theme::FONT_LARGE, Theme::C_BLACK, -23, -80);
     }
-
-    // Select the directory
-    bool selected = (strcmp(selected_directory, current_directory) == 0);
-    display.button(Anchor::BOTTOM_LEFT, 120, 30, selected ? Theme::C_ACCENT : Theme::C_ACCENT_DARK, 10, 20, -80, [](void*) {
-        strcpy(selected_directory, current_directory);
-
-        audio.process_directory(selected_directory);
-        page(Page::FILES, true);
-    });
-    display.text(Anchor::BOTTOM_LEFT, true, "Select", Theme::FONT_LARGE, selected ? Theme::C_BG : Theme::C_TEXT_MUTED, 37, -81);
-    display.text(Anchor::BOTTOM_LEFT, true, current_directory, Theme::FONT_SMALL, Theme::C_TEXT_MUTED, 0, -120);
 }
 
 void page_settings() {
-    display.text(Anchor::TOP_LEFT, true, "Settings", Theme::FONT_HUGE, Theme::C_WHITE, 10, 40);
-
-    constexpr uint16_t slider_width = 280;
-    constexpr uint16_t slider_height = 20;
+    display.text(Anchor::TOP_LEFT, true, "", Theme::FONT_ICON_LARGE, Theme::C_WHITE, 10, 35);
+    display.text(Anchor::TOP_LEFT, true, "Settings", Theme::FONT_HUGE, Theme::C_WHITE, 40, 38);
 
     // Brightness Slider
-    uint8_t current_brightness = display.get_brightness();
-    display.text(Anchor::TOP_LEFT, true, "Brightness", Theme::FONT_LARGE, Theme::C_WHITE, 10, 80);
-    display.bar(Anchor::TOP_CENTER, slider_width, slider_height, Theme::C_TEXT_MUTED, Theme::C_WARNING, 10, 0, 110, current_brightness,
-        [](void*) {
+    current_brightness = display.get_brightness();
+    display.text(Anchor::TOP_LEFT, true, "", Theme::FONT_ICON_SMALL, Theme::C_WHITE, 10, 78); // Brightness Icon
+    display.text(Anchor::TOP_LEFT, true, "Brightness", Theme::FONT_LARGE, Theme::C_WHITE, 30, 80);
+    display.bar(Anchor::TOP_CENTER, SLIDER_WIDTH, SLIDER_HEIGHT, Theme::C_TEXT_MUTED, Theme::C_WARNING, 10, 0, 110, current_brightness,
+        [&current_brightness](void*) {
             TouchData p = display.get_touchdata();
             if (p.z == 0) return;
-            uint8_t val = map(constrain(p.x, 0, slider_width), 0, slider_width, 1, 100);
+            uint8_t val = map(constrain(p.x, 0, SLIDER_WIDTH), 0, SLIDER_WIDTH, 1, 100);
             if (val != display.get_brightness()) {
-                display.set_brightness(val);
-                display.bar(Anchor::TOP_CENTER, slider_width, slider_height, Theme::C_TEXT_MUTED, Theme::C_WARNING, 10, 0, 110, val, nullptr);
+                current_brightness = val;
+                display.set_brightness(current_brightness);
+                display.bar(Anchor::TOP_CENTER, SLIDER_WIDTH, SLIDER_HEIGHT, Theme::C_TEXT_MUTED, Theme::C_WARNING, 10, 0, 110, current_brightness, nullptr);
             }
         }, nullptr);
 
     // Volume Slider
-    uint8_t current_volume = audio.get_volume();
-    display.text(Anchor::TOP_LEFT, true, "Volume", Theme::FONT_LARGE, TFT_WHITE, 10, 150);
-    display.bar(Anchor::TOP_CENTER, slider_width, slider_height, Theme::C_TEXT_MUTED, Theme::C_ACCENT, 10, 0, 180, current_volume,
-        [](void*) {
+    current_volume = audio.get_volume();
+    display.text(Anchor::TOP_LEFT, true, "", Theme::FONT_ICON_SMALL, TFT_WHITE, 10, 148); // Volume Icon
+    display.text(Anchor::TOP_LEFT, true, "Volume", Theme::FONT_LARGE, TFT_WHITE, 30, 150);
+    display.bar(Anchor::TOP_CENTER, SLIDER_WIDTH, SLIDER_HEIGHT, Theme::C_TEXT_MUTED, Theme::C_ACCENT, 10, 0, 180, current_volume,
+        [&current_volume](void*) {
             TouchData p = display.get_touchdata();
             if (p.z == 0) return;
-            uint8_t val = map(constrain(p.x, 0, slider_width), 0, slider_width, 1, 100);
+            uint8_t val = map(constrain(p.x, 0, SLIDER_WIDTH), 0, SLIDER_WIDTH, 0, 100);
             if (val != audio.get_volume()) {
-                audio.set_volume(val);
-                display.bar(Anchor::TOP_CENTER, slider_width, slider_height, Theme::C_TEXT_MUTED, Theme::C_ACCENT, 10, 0, 180, val, nullptr);
-                show_statusbar();
+                current_volume = val;
+                audio.set_volume(current_volume);
+                display.bar(Anchor::TOP_CENTER, SLIDER_WIDTH, SLIDER_HEIGHT, Theme::C_TEXT_MUTED, Theme::C_ACCENT, 10, 0, 180, current_volume, nullptr);
+                
+                snprintf(vol_buf, sizeof(vol_buf), "Vol: %-3d%%", audio.get_volume());
+                display.object(Anchor::TOP_RIGHT, 80, 26, Theme::C_ACCENT_DARK, 10, -5, 5);
+                display.text(Anchor::TOP_RIGHT, true, vol_buf, Theme::FONT_MEDIUM, Theme::C_TEXT_PRIMARY, -10, 9);
             }
         }, nullptr);
 
@@ -408,36 +495,6 @@ void page_settings() {
         vTaskGetRunTimeStats(runtime_buf);
         Serial.printf("%s\n", runtime_buf);
 
-        /* --------------------------------------------------
-        Parse IDLE0 / IDLE1 CPU percentage
-        -------------------------------------------------- */
-        float idle0 = 0.0f;
-        float idle1 = 0.0f;
-
-        char *line = strtok(runtime_buf, "\n");
-        while (line != nullptr) {
-            if (strncmp(line, "IDLE0", 5) == 0) {
-                sscanf(line, "IDLE0 %*u %f%%", &idle0);
-            }
-            else if (strncmp(line, "IDLE1", 5) == 0) {
-                sscanf(line, "IDLE1 %*u %f%%", &idle1);
-            }
-            line = strtok(nullptr, "\n");
-        }
-
-        /* --------------------------------------------------
-        Normalize per core
-        -------------------------------------------------- */
-        float core0_used = 100.0f - idle0;
-        float core1_used = 100.0f - idle1;
-        float total_used = core0_used + core1_used;
-        float esp32_used = (total_used / 200.0f) * 100.0f;
-
-        Serial.println("======= CPU USAGE (NORMALIZED) =======");
-        Serial.printf("Core 0 used : %.1f%% (idle %.1f%%)\n", core0_used, idle0);
-        Serial.printf("Core 1 used : %.1f%% (idle %.1f%%)\n", core1_used, idle1);
-        Serial.printf("ESP32 total : %.1f%% / 200%%\n\n", esp32_used);
-
         Serial.println("=========== HEAP INFO ===========");
         Serial.printf("Free Heap     : %d bytes\n", heap_caps_get_free_size(MALLOC_CAP_8BIT));
         Serial.printf("Min Free Heap : %d bytes\n", heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
@@ -448,7 +505,8 @@ void page_settings() {
         show_notification("Resources dumped to Serial", Theme::C_ACCENT, 2000);
 
     });
-    display.text(Anchor::MIDDLE_CENTER, true, "Dump", Theme::FONT_LARGE, Theme::C_WHITE, -75, 70);
+    display.text(Anchor::MIDDLE_CENTER, true, "", Theme::FONT_ICON_SMALL, Theme::C_WHITE, -100, 72); // Dump Icon
+    display.text(Anchor::MIDDLE_CENTER, true, "Dump", Theme::FONT_LARGE, Theme::C_WHITE, -60, 72);
 
     // Mount SD Card Button
     display.button(Anchor::MIDDLE_CENTER, 135, 50, Theme::C_ACCENT, 15, 73, 70, [](void*) {
@@ -463,7 +521,8 @@ void page_settings() {
             show_notification("Already Mounted!", Theme::C_ACCENT, 2000);
         }
     });
-    display.text(Anchor::MIDDLE_CENTER, true, "Mount", Theme::FONT_LARGE, Theme::C_BG, 73, 70);
+    display.text(Anchor::MIDDLE_CENTER, true, "", Theme::FONT_ICON_SMALL, Theme::C_BG, 45, 72); // Mount Icon
+    display.text(Anchor::MIDDLE_CENTER, true, "Mount", Theme::FONT_LARGE, Theme::C_BG, 88, 72);
 
     // Restart ESP Button
     display.button(Anchor::BOTTOM_CENTER, 280, 50, Theme::C_ERROR, 15, 0, -80, [](void*) {
@@ -478,6 +537,12 @@ void page_settings() {
 // ======================================================================== //
 
 void show_statusbar(){
+    // Uncomment this if you want un-pilled bar
+    // display.object(Anchor::TOP_CENTER, 320, 46, Theme::C_ACCENT_DARK, 0);
+
+    // Or this if you want floating bar
+    // display.object(Anchor::TOP_CENTER, 310, 26, Theme::C_ACCENT_DARK, 10, 5, 5);
+
     display.object(Anchor::TOP_LEFT, 115, 26, Theme::C_ACCENT_DARK, 10, 5, 5);
     if (!audio.get_status())
         display.text(Anchor::TOP_LEFT, true, "Paused...", Theme::FONT_MEDIUM, Theme::C_TEXT_PRIMARY, 10, 9);
@@ -493,37 +558,53 @@ void show_menubar(Page active) {
     // Uncomment this if you want un-pilled bar
     // display.object(Anchor::BOTTOM_CENTER, 320, 64, Theme::C_ACCENT_DARK, 0);
 
-    // Or this if you want floating bar
-    // display.object(Anchor::BOTTOM_CENTER, 310, 26, Theme::C_ACCENT_DARK, 10, 5, 5);
-
     auto tab = [&](Anchor anchor, Page p, const char* label, int offset_x, int text_offset) {
         bool isActive = (active == p);
         uint16_t color = isActive ? Theme::C_ACCENT : Theme::C_ACCENT_DARK;
 
         display.button(anchor, 90, 44, color, Theme::R_MEDIUM, offset_x, -10, [p](void*) { page(p); });
-        display.text(anchor, true, label, Theme::FONT_LARGE, isActive ? Theme::C_BG : Theme::C_TEXT_MUTED, offset_x + text_offset, -18);
+        display.text(anchor, true, label, Theme::FONT_ICON_LARGE, isActive ? Theme::C_BG : Theme::C_TEXT_MUTED, offset_x + text_offset, -10);
     };
 
-    tab(Anchor::BOTTOM_LEFT,   Page::PLAYER,    "Player",    10, 12);
-    tab(Anchor::BOTTOM_CENTER, Page::FILES,     "Files",     0,  0);
-    tab(Anchor::BOTTOM_RIGHT,  Page::SETTINGS,  "Settings", -10, -5);
+    tab(Anchor::BOTTOM_LEFT,   Page::PLAYER,    "",    10, 30); // Music Icon
+    tab(Anchor::BOTTOM_CENTER, Page::FILES,     "",     0,  0); // File Icon
+    tab(Anchor::BOTTOM_RIGHT,  Page::SETTINGS,  "",   -10, -30);   // Gear Icon
+}
+
+static void notif_timeout(TimerHandle_t xTimer) {
+    // display.object(Anchor::TOP_LEFT, 200, 26, Theme::C_BLACK, 0, 5, 5);
+    show_statusbar();
 }
 
 void show_notification(const char* text, uint16_t color, uint16_t delay_ms) {
-    if (strlen(text) > 16)
-        display.object(Anchor::TOP_LEFT, 200, 26, Theme::C_ACCENT_DARK, 10, 5, 5);
-    else
-        display.object(Anchor::TOP_LEFT, 115, 26, Theme::C_ACCENT_DARK, 10, 5, 5);
+    if (!text) return;
 
+    size_t len = strlen(text);
+    uint16_t width;
+
+    if (len > 21)       width = 200;
+    else if (len > 15)  width = 160;
+    else                width = 115;
+
+    display.object(Anchor::TOP_LEFT, width, 26, Theme::C_ACCENT_DARK, 10, 5, 5);
     display.text(Anchor::TOP_LEFT, true, text, Theme::FONT_MEDIUM, color, 10, 9);
-    if (delay_ms > 0) {
-        vTaskDelay(delay_ms / portTICK_PERIOD_MS);
 
-        if (current_page == Page::SETTINGS)
-            display.object(Anchor::TOP_LEFT, 200, 26, Theme::C_BLACK, 0, 5, 5);
+    if (delay_ms == 0)
+        return;
 
-        show_statusbar();
+    if (!notif_timer) {
+        notif_timer = xTimerCreate(
+            "Malkuth: Notification Timer",
+            pdMS_TO_TICKS(delay_ms),
+            pdFALSE,
+            NULL,
+            notif_timeout
+        );
     }
+
+    xTimerStop(notif_timer, 0);
+    xTimerChangePeriod(notif_timer, pdMS_TO_TICKS(delay_ms), 0);
+    xTimerStart(notif_timer, 0);
 }
 
 
@@ -544,24 +625,26 @@ uint8_t previous_brightness;
 
 Keypad keypad = Keypad(makeKeymap(keys), pin_rows, pin_cols, ROWS, COLS); 
 
-void keypress_check(){
+void check_keypress(){
     char key = keypad.getKey();
 
     if (key){
-    if (current_page == Page::BOOT_SCREEN)
-        page(Page::PLAYER);
+    if (current_page == Page::BOOT_SCREEN) page(Page::PLAYER);
     else 
     {
-        uint8_t current_volume = audio.get_volume();
-        uint8_t current_brightness = display.get_brightness();
+        current_volume      = audio.get_volume();
+        current_brightness  = display.get_brightness();
 
         switch(key){
             ////////////////////////////////////////////////////////////////////
             //                          System Command                        //
             ////////////////////////////////////////////////////////////////////
-            case 'x': 
-                show_notification("Tired zzz...", Theme::C_WARNING, 500);
-                ESP.restart();
+            case 'x':
+                show_notification("Tired zzz...", Theme::C_WARNING, 1000);
+                display.clear();
+                display.text(Anchor::MIDDLE_CENTER, true, "Shutting Down... :3", Theme::FONT_LARGE, Theme::C_ACCENT);
+                vTaskDelay(1500/ portTICK_PERIOD_MS);
+                esp_deep_sleep_start();
                 break;
 
             ////////////////////////////////////////////////////////////////////
@@ -579,16 +662,16 @@ void keypress_check(){
 
             case 'p':
                 audio.toggle();
-                show_notification(audio.get_status() ? "Playing..." : "Paused...", Theme::C_TEXT_PRIMARY, 500);
                 if (current_page == Page::PLAYER){
                     display.object(Anchor::BOTTOM_CENTER, 35, 35, Theme::C_ACCENT_MUTED, -1, 0, -80);
                     display.text(Anchor::BOTTOM_CENTER, true, 
                         audio.get_status() ? "||" : "▶", 
                         Theme::FONT_LARGE, Theme::C_WHITE, 
-                        audio.get_status() ? -2 : 2, 
+                        audio.get_status() ? -1 : 2, 
                         audio.get_status() ? -85 : -82
                     );
                 }
+                show_statusbar();
                 break;
 
             case '+':
@@ -598,7 +681,14 @@ void keypress_check(){
                     current_volume += 5;
 
                 audio.set_volume(current_volume);
-                show_statusbar();
+                
+                snprintf(vol_buf, sizeof(vol_buf), "Vol: %-3d%%", audio.get_volume());
+                display.object(Anchor::TOP_RIGHT, 80, 26, Theme::C_ACCENT_DARK, 10, -5, 5);
+                display.text(Anchor::TOP_RIGHT, true, vol_buf, Theme::FONT_MEDIUM, Theme::C_TEXT_PRIMARY, -10, 9);
+
+                if (current_page == Page::SETTINGS)
+                    display.bar(Anchor::TOP_CENTER, SLIDER_WIDTH, SLIDER_HEIGHT, Theme::C_TEXT_MUTED, Theme::C_ACCENT, 10, 0, 180, current_volume, nullptr);
+
                 break;
 
             case '-':
@@ -608,7 +698,13 @@ void keypress_check(){
                     current_volume -= 5;
 
                 audio.set_volume(current_volume);
-                show_statusbar();
+                snprintf(vol_buf, sizeof(vol_buf), "Vol: %-3d%%", audio.get_volume());
+                display.object(Anchor::TOP_RIGHT, 80, 26, Theme::C_ACCENT_DARK, 10, -5, 5);
+                display.text(Anchor::TOP_RIGHT, true, vol_buf, Theme::FONT_MEDIUM, Theme::C_TEXT_PRIMARY, -10, 9);
+
+                if (current_page == Page::SETTINGS)
+                    display.bar(Anchor::TOP_CENTER, SLIDER_WIDTH, SLIDER_HEIGHT, Theme::C_TEXT_MUTED, Theme::C_ACCENT, 10, 0, 180, current_volume, nullptr);
+
                 break;
 
             ////////////////////////////////////////////////////////////////////
@@ -616,11 +712,15 @@ void keypress_check(){
             ////////////////////////////////////////////////////////////////////
             case '(':
                 if (current_brightness <= 5)
-                    current_brightness = 0;
+                    current_brightness = 1;
                 else
                     current_brightness -= 5;
 
-                display.set_brightness(current_brightness);  
+                display.set_brightness(current_brightness);
+
+                if (current_page == Page::SETTINGS)
+                    display.bar(Anchor::TOP_CENTER, SLIDER_WIDTH, SLIDER_HEIGHT, Theme::C_TEXT_MUTED, Theme::C_WARNING, 10, 0, 110, current_brightness, nullptr);
+
                 break;
             case ')':
                 if (current_brightness >= 95)
@@ -628,7 +728,11 @@ void keypress_check(){
                 else
                     current_brightness += 5;
 
-                display.set_brightness(current_brightness);  
+                display.set_brightness(current_brightness);
+
+                if (current_page == Page::SETTINGS)
+                    display.bar(Anchor::TOP_CENTER, SLIDER_WIDTH, SLIDER_HEIGHT, Theme::C_TEXT_MUTED, Theme::C_WARNING, 10, 0, 110, current_brightness, nullptr);
+
                 break;
             case 's':
                 if (current_brightness == 0)
@@ -639,8 +743,6 @@ void keypress_check(){
                 }
                 break;
         }
-        if (current_page == Page::SETTINGS)
-            page(Page::SETTINGS, true);
     }
     }
 }

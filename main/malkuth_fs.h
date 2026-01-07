@@ -3,7 +3,7 @@
 #include <SdFat.h>
 
 #define SD_FAT_TYPE 3
-#define SPI_SPEED   SD_SCK_MHZ(79)
+#define SPI_SPEED   SD_SCK_MHZ(75)
 
 /// Taken from https://github.com/greiman/SdFat/issues/450
 class ExfatSpi : public SdSpiBaseClass {

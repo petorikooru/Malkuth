@@ -96,42 +96,38 @@ struct DisplayCommand {
 struct Button {
     int16_t     offset_x, offset_y;
     uint16_t    size_x, size_y;
+    bool        is_bar;
 
     std::function<void(void*)>  func;
     void*                       param;
 };
-
-// struct JpgState {
-//     int16_t dst_x;
-//     int16_t dst_y;
-//     uint16_t dst_w;
-//     uint16_t dst_h;
-// };
 
 class MalkuthDisplay {
 private:
     TFT_eSPI _tft;
     FT6236   _ts    = FT6236();
     PNG      _png;
-    SdFs*    _sd;
-    // TJpg_Decoder _jpg;
+    // SdFs*    _sd;
 
     uint8_t  _brightness = 50;
-
-    int16_t  _pos_x;
-    int16_t  _pos_y;
-
-    uint16_t _fg_color = TFT_WHITE;
     uint16_t _bg_color = TFT_BLACK;
+    uint16_t _fg_color = TFT_WHITE;
+
+    uint16_t  _constrain_x_start, _constrain_x_end;
+    uint16_t  _constrain_y_start, _constrain_y_end;
+    uint16_t  _constrain_width, _constrain_height;
+    uint16_t  _constrain_counter = 1;
 
     bool     _ts_exist;
     uint16_t _ts_x = 0;
     uint16_t _ts_y = 0;
+    uint32_t _hold_timeout;
 
     QueueHandle_t _queue_display        = nullptr;
     TaskHandle_t  _taskhandle_display   = nullptr;
 
     std::vector<Button> _buttons;
+    std::vector<Button> _buttons_temp;
 
     static void task_display(void* parameters);
 
@@ -145,6 +141,7 @@ private:
     
     // static bool render_jpg(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap);
     static int  render_png(PNGDRAW* png_draw);
+    static int  render_png_constrained(PNGDRAW* png_draw);
     
     static void draw_image(MalkuthDisplay* self, const DisplayCommand& cmd);
     static void draw_text(MalkuthDisplay* self, const DisplayCommand& cmd);
@@ -158,12 +155,20 @@ public:
          init(const uint8_t core);
 
     void image(
-            ImageType       type, 
+            const ImageType type, 
             const uint8_t*  image, 
-            size_t          data_size
+            const size_t    data_size
     ),   image(
-            ImageType   type,
-            const char* path,
+            const ImageType type, 
+            const uint8_t*  image, 
+            const size_t    data_size,
+
+            const uint16_t  size_x, const uint16_t size_y,
+            const uint16_t offset_x, const uint16_t offset_y
+
+    ),   image(
+            const ImageType type,
+            const char*     path,
 
             const uint16_t size_x, const uint16_t size_y,
             const int16_t offset_x, const int16_t offset_y
@@ -193,22 +198,31 @@ public:
             const uint16_t color, const uint8_t roundness
     ),   object(
             Anchor anchor, 
-            const uint16_t size_x, const uint16_t size_y, 
-            const uint16_t color, const uint8_t roundness,
-            const int8_t offset_x, const int8_t offset_y
+            const uint16_t size_x,  const uint16_t size_y, 
+            const uint16_t color,   const uint8_t roundness,
+            const int8_t offset_x,  const int8_t offset_y
     );
 
     void button(
             Anchor anchor,
-            const uint16_t size_x, const uint16_t size_y,
-            const uint16_t color, const uint8_t roundness,
+            const uint16_t size_x,  const uint16_t size_y,
             const int16_t offset_x, const int16_t offset_y, 
-            const std::function<void(void*)>& func, void* param = nullptr
+            const std::function<void(void*)>& func, void* param = nullptr,
+             bool is_temp = false
     ),   button(
             Anchor anchor,
-            const uint16_t size_x, const uint16_t size_y,
+            const uint16_t size_x,  const uint16_t size_y,
+            const uint16_t color,   const uint8_t roundness,
             const int16_t offset_x, const int16_t offset_y, 
-            const std::function<void(void*)>& func, void* param = nullptr
+            const std::function<void(void*)>& func, void* param = nullptr,
+            const bool is_temp = false
+    ),   button(
+            Anchor anchor,          const bool is_bar,
+            const uint16_t size_x,  const uint16_t size_y,
+            const uint16_t color,   const uint8_t roundness,
+            const int16_t offset_x, const int16_t offset_y, 
+            const std::function<void(void*)>& func, void* param = nullptr,
+            const bool is_temp = false
     );
 
     void bar(
@@ -228,7 +242,8 @@ public:
     void clear();
 
     void buttons_clear();
-    void buttons_check(){_buttons_check();};
+    void buttons_clear_temp();
+    void check_buttons(){_buttons_check();};
 
     uint32_t get_free_resources();
     uint32_t get_free_queue();
@@ -237,10 +252,7 @@ public:
     uint8_t     get_brightness();
 
     // void set_sdfs(SdFs& sd); // TODO: Cover Image loading from SD Card
-    void set_fg(const uint16_t color);
-    void set_bg(const uint16_t color);
     void set_brightness(uint8_t percent);
-    void set_sdfs(SdFs& sd);
 
     uint16_t rgb888_to_rgb565(const uint32_t color);
 };

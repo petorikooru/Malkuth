@@ -19,6 +19,7 @@ void MalkuthDisplay::task_display(void* parameters) {
     while (true) {
         xQueueReceive(self->_queue_display, &cmd, portMAX_DELAY);
         self->handle_command(self, cmd);
+        vTaskDelay(1);
     }
 }
 
@@ -104,12 +105,66 @@ void MalkuthDisplay::draw_image(MalkuthDisplay* self, const DisplayCommand& cmd)
 void MalkuthDisplay::draw_png_flash(MalkuthDisplay *self, const DisplayCommand&cmd) {
     const auto& img = cmd.payload.image;
     
-    if (self->_png.openFLASH((uint8_t*)img.data, img.data_size, render_png) == PNG_SUCCESS) {
-        self->_tft.startWrite();
-        self->_png.decode(self, 0);
-        self->_png.close();
-        self->_tft.endWrite();
+    if (img.size_x != 0) {
+
+      self->_constrain_x_start  = img.offset_x; 
+      self->_constrain_x_end    = img.offset_x + img.size_x;
+      self->_constrain_y_start  = img.offset_y;
+      self->_constrain_y_end    = img.offset_y + img.size_y;
+      self->_constrain_width    = img.size_x;
+      self->_constrain_height   = img.size_y;
+
+      if (self->_png.openFLASH((uint8_t*)img.data, img.data_size, render_png_constrained) == PNG_SUCCESS) {
+          self->_tft.startWrite();
+          self->_png.decode(self, 0);
+          self->_png.close();
+          self->_tft.endWrite();
+          self->_constrain_counter = 1;
+      }
     }
+
+    else {
+      if (self->_png.openFLASH((uint8_t*)img.data, img.data_size, render_png) == PNG_SUCCESS) {
+          self->_tft.startWrite();
+          self->_png.decode(self, 0);
+          self->_png.close();
+          self->_tft.endWrite();
+      }
+    }
+}
+
+int MalkuthDisplay::render_png(PNGDRAW* png_draw) {
+    MalkuthDisplay* self = static_cast<MalkuthDisplay*>(png_draw->pUser);
+    uint16_t line_buffer[MAX_IMAGE_WIDTH];
+  
+    self->_png.getLineAsRGB565(png_draw, line_buffer, PNG_RGB565_BIG_ENDIAN, 0xffffffff);
+    self->_tft.pushImage(0, png_draw->y, png_draw->iWidth, 1, line_buffer);
+  
+    return 1;
+}
+
+int MalkuthDisplay::render_png_constrained(PNGDRAW* png_draw) {
+    MalkuthDisplay* self = static_cast<MalkuthDisplay*>(png_draw->pUser);
+
+    if (self->_constrain_counter >= self->_constrain_y_start &&
+        self->_constrain_counter <= self->_constrain_y_end
+    ){
+        uint16_t line_buffer[MAX_IMAGE_WIDTH];
+      
+        self->_png.getLineAsRGB565(png_draw, line_buffer, PNG_RGB565_BIG_ENDIAN, 0xffffffff);
+
+        self->_tft.pushImage(
+          self->_constrain_x_start, 
+          png_draw->y, 
+          self->_constrain_width, 
+          1, 
+          line_buffer
+        );
+    }
+
+    self->_constrain_counter++;
+  
+    return 1;
 }
 
 // void MalkuthDisplay::draw_jpg(MalkuthDisplay *self, const DisplayCommand&cmd){
@@ -223,16 +278,6 @@ void MalkuthDisplay::draw_bar(MalkuthDisplay* self, const DisplayCommand& cmd) {
     }
 }
 
-int MalkuthDisplay::render_png(PNGDRAW* png_draw) {
-  MalkuthDisplay* self = static_cast<MalkuthDisplay*>(png_draw->pUser);
-  uint16_t line_buffer[MAX_IMAGE_WIDTH];
-
-  self->_png.getLineAsRGB565(png_draw, line_buffer, PNG_RGB565_BIG_ENDIAN, 0xffffffff);
-  self->_tft.pushImage(0, png_draw->y, png_draw->iWidth, 1, line_buffer);
-
-  return 1;
-}
-
 // bool MalkuthDisplay::render_jpg(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
 //     if (!_jpg_self) return false;
 
@@ -294,14 +339,14 @@ void MalkuthDisplay::set_brightness(uint8_t percent) {
 /// Public Function
 ///
 void MalkuthDisplay::init() {
-    _queue_display = xQueueCreate(32, sizeof(DisplayCommand));
+    _queue_display = xQueueCreate(64, sizeof(DisplayCommand));
 
     xTaskCreate(
         task_display,
-        "Malkuth_Display",
+        "Malkuth Display",
         32000,
         this,
-        0,
+        1,
         &_taskhandle_display
     );
 }
@@ -311,7 +356,7 @@ void MalkuthDisplay::init(const uint8_t core) {
 
     xTaskCreatePinnedToCore(
         task_display,
-        "Malkuth_Display",
+        "Malkuth: Display",
         32000,
         this,
         1,
@@ -322,14 +367,20 @@ void MalkuthDisplay::init(const uint8_t core) {
 
 void MalkuthDisplay::buttons_clear() {
   _buttons.clear();
+  _buttons_temp.clear();
+}
+
+void MalkuthDisplay::buttons_clear_temp() {
+  _buttons_temp.clear();
 }
 
 void MalkuthDisplay::button(
-    Anchor anchor,
+    Anchor anchor, const bool is_bar,
     const uint16_t size_x, const uint16_t size_y,
     const uint16_t color, const uint8_t roundness,
     const int16_t offset_x, const int16_t offset_y, 
-    const std::function<void(void*)>& func, void* param
+    const std::function<void(void*)>& func, void* param,
+    const bool is_temp
 ){
     uint16_t width = size_x;
     uint16_t height = size_y;
@@ -342,18 +393,30 @@ void MalkuthDisplay::button(
 
     object(anchor, size_x, size_y, color, roundness, offset_x, offset_y);
 
-    _buttons.push_back({ 
-        x, y,
-        width, height,
-        func, param 
-    });
+    if (is_temp) {
+        _buttons_temp.push_back({ 
+            x, y,
+            width, height,
+            is_bar,
+            func, param
+        });
+    } else {
+        _buttons.push_back({ 
+            x, y,
+            width, height,
+            is_bar,
+            func, param
+        });
+    }
 }
 
 void MalkuthDisplay::button(
     Anchor anchor,
     const uint16_t size_x, const uint16_t size_y,
+    const uint16_t color, const uint8_t roundness,
     const int16_t offset_x, const int16_t offset_y, 
-    const std::function<void(void*)>& func, void* param
+    const std::function<void(void*)>& func, void* param,
+    const bool is_temp
 ){
     uint16_t width = size_x;
     uint16_t height = size_y;
@@ -364,33 +427,88 @@ void MalkuthDisplay::button(
     int16_t x = offset_x + calculate_anchor_x(anchor, width);
     int16_t y = offset_y + calculate_anchor_y(anchor, height);
 
-    _buttons.push_back({ 
-        x, y,
-        width, height,
-        func, param 
-    });
+    object(anchor, size_x, size_y, color, roundness, offset_x, offset_y);
+
+    if (is_temp) {
+        _buttons_temp.push_back({ 
+            x, y,
+            width, height,
+            false,
+            func, param
+        });
+    } else {
+        _buttons.push_back({ 
+            x, y,
+            width, height,
+            false,
+            func, param
+        });
+    }
+}
+
+void MalkuthDisplay::button(
+    Anchor anchor,
+    const uint16_t size_x, const uint16_t size_y,
+    const int16_t offset_x, const int16_t offset_y, 
+    const std::function<void(void*)>& func, void* param,
+    const bool is_temp
+){
+    uint16_t width = size_x;
+    uint16_t height = size_y;
+
+    if (width > _tft.width())   width   = _tft.width();
+    if (height > _tft.height()) height  = _tft.height();
+
+    int16_t x = offset_x + calculate_anchor_x(anchor, width);
+    int16_t y = offset_y + calculate_anchor_y(anchor, height);
+
+    if (is_temp) {
+        _buttons_temp.push_back({ 
+            x, y,
+            width, height,
+            false,
+            func, param
+        });
+    } else {
+        _buttons.push_back({ 
+            x, y,
+            width, height,
+            false,
+            func, param
+        });
+    }
 }
 
 void MalkuthDisplay::_buttons_check() {
-  if (!_ts_exist) return;
+    if (!_ts_exist) return;
 
-  TS_Point p = _ts.getPoint();
-  if (p.z == 0) return;
+    const uint32_t now = millis();
+    if (now < _hold_timeout) return;
 
-  for (const auto& btn : _buttons) {
-    if (p.x >= btn.offset_x && 
-        p.x <  btn.offset_x + btn.size_x && 
-        p.y >= btn.offset_y && 
-        p.y < btn.offset_y + btn.size_y)
-    {
-      if (btn.func) {
-        btn.func(btn.param);
-        vTaskDelay(150 / portTICK_PERIOD_MS);
-        return;
-      }
-    }
-  }
-  vTaskDelay(33 / portTICK_PERIOD_MS); // 30 fps
+    TS_Point p = _ts.getPoint();
+    if (p.z == 0) return;
+
+    auto check = [&](const std::vector<Button>& buttons) -> bool {
+        for (const auto& btn : buttons) {
+            if (p.x >= btn.offset_x &&
+                p.x <  btn.offset_x + btn.size_x &&
+                p.y >= btn.offset_y &&
+                p.y <  btn.offset_y + btn.size_y)
+            {
+                if (btn.func) {
+                    btn.func(btn.param);
+
+                    // 60 fps response for the bar
+                    _hold_timeout = now + (btn.is_bar ? 16 : 150);
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    if (check(_buttons))        return;
+    if (check(_buttons_temp))   return;
 }
 
 void MalkuthDisplay::text(
@@ -443,9 +561,9 @@ void MalkuthDisplay::text(
 }
 
 void MalkuthDisplay::image(
-    ImageType type,
-    const uint8_t* image,
-    size_t data_size
+    const ImageType type,
+    const uint8_t*  image,
+    const size_t    data_size
 ){
     DisplayCommand cmd = {
       .type = DisplayType::IMAGE,
@@ -465,8 +583,33 @@ void MalkuthDisplay::image(
 }
 
 void MalkuthDisplay::image(
-    ImageType   type,
-    const char* path,
+    const ImageType type,
+    const uint8_t*  image,
+    const size_t    data_size,
+
+    const uint16_t size_x,   const uint16_t size_y,
+    const uint16_t offset_x, const uint16_t offset_y
+){
+    DisplayCommand cmd = {
+      .type = DisplayType::IMAGE,
+      .payload = { .image = {
+        .type = type,
+        .data_size = data_size,
+        .data = image,
+        .path = NULL,
+        .size_x = size_x,
+        .size_y = size_y,
+        .offset_x = offset_x,
+        .offset_y = offset_y,
+      }}
+    };
+
+    xQueueSend(_queue_display, &cmd, 50);
+}
+
+void MalkuthDisplay::image(
+    const ImageType type,
+    const char*     path,
 
     const uint16_t size_x, const uint16_t size_y,
     const int16_t offset_x, const int16_t offset_y
@@ -573,6 +716,7 @@ void MalkuthDisplay::bar(
     _buttons.push_back({
         x, y,
         size_x, size_y,
+        true,
         func, param
     });
 }
@@ -603,17 +747,9 @@ TouchData MalkuthDisplay::get_touchdata() {
   };
 }
 
-void MalkuthDisplay::set_fg(const uint16_t color){
-    _fg_color = color;
-}
-
-void MalkuthDisplay::set_bg(const uint16_t color){
-    _bg_color = color;
-}
-
-void MalkuthDisplay::set_sdfs(SdFs& sd){
-    _sd = &sd;
-}
+// void MalkuthDisplay::set_sdfs(SdFs& sd){
+//     _sd = &sd;
+// }
 
 uint16_t MalkuthDisplay::rgb888_to_rgb565(const uint32_t color) {
   return ((color >> 16) & 0xF8) << 8 |

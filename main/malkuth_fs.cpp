@@ -4,7 +4,7 @@ bool MalkuthFs::init(){
     _exfat_spi = new ExfatSpi(2, 42, 40, 41);
     _pin_cs = 2;
 
-    _state = _sd.begin(SdSpiConfig(2, DEDICATED_SPI, SPI_SPEED, _exfat_spi));
+    _state = _sd.begin(SdSpiConfig(_pin_cs, DEDICATED_SPI, SPI_SPEED, _exfat_spi));
     if (!_state)
         return false;
     else

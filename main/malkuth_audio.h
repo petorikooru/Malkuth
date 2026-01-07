@@ -5,6 +5,7 @@
 #include <AudioTools/AudioCodecs/CodecAACHelix.h>
 #include <AudioTools/AudioCodecs/CodecWAV.h>
 #include <AudioTools/Concurrency/RTOS.h>
+#include "AudioTools/AudioLibs/Concurrency.h" 
 
 #include <SdFat.h>
 
@@ -21,18 +22,23 @@ typedef struct {
 class CustomI2S : public I2SStream {
 public:
   uint64_t bytes_written = 0;
+
   size_t write(const uint8_t* buffer, size_t size) override {
     size_t res      = I2SStream::write(buffer, size);
     bytes_written  += res;
+
     return res;
   }
   float getAudioCurrentTime() {
     auto info = audioInfo();
-    if (info.sample_rate == 0) 
-      return 0.0f;
+
+    if (info.sample_rate == 0) return 0.0f;
+
     int byte_rate = info.sample_rate * info.channels * (info.bits_per_sample / 8);
+    
     return byte_rate > 0 ? (float)bytes_written / byte_rate : 0.0f;
   }
+
   void resetBytesWritten() {
     bytes_written = 0;
   }
@@ -46,13 +52,13 @@ private:
     bool      _playing;
     uint8_t   _volume = 10;
     static float     _current_duration;
-    
-    // TODO :  Multiprocessing on Audio
-    // BufferRTOS<uint8_t> buffer(1024 * 10);
-    // QueueStream<uint8_t> queue(buffer);
 
     AudioSourceVector<FsFile>*  _source;
     AudioPlayer*                _player;
+
+    // TODO :  Multiprocessing on Audio
+    BufferRTOS<uint8_t>  _buffer_audio;
+    QueueStream<uint8_t> _queue_audio;
 
     CustomI2S _i2s;
 
@@ -83,6 +89,9 @@ private:
     static FsFile*  file_to_stream_callback(const char* path, FsFile& old_file);
     FsFile*         file_to_stream(const char* path, FsFile& old_file);
 
+    // static void  file_to_stream_callback(const char* path, FsFile& old_file);
+    // void         file_to_stream(const char* path, FsFile& old_file);
+
     static AudioMetadata get_metadata(FsFile& file, const char* path);
 
     static AudioMetadata get_metadata_flac(FsFile& file);
@@ -95,6 +104,11 @@ private:
     static AudioMetadata get_metadata_wav(FsFile& file);
 
 public:
+  MalkuthAudio():
+    _buffer_audio(1024 * 10),
+    _queue_audio(_buffer_audio)
+  {}
+
     bool init(uint8_t pin_bck = 8, uint8_t pin_ws = 17, uint8_t pin_data = 18);
     void reset();
   
@@ -106,7 +120,10 @@ public:
     void set_sdfs(SdFs& sd);
     void set_volume(uint8_t percent);
 
-    void loop();
+    size_t loop();
+    size_t loop_all();
+    void   start_loop();
+
     void next();
     void previous();
 

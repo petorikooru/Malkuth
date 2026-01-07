@@ -4,13 +4,13 @@ MalkuthAudio* MalkuthAudio::self = nullptr;
 
 bool MalkuthAudio::init(uint8_t pin_bck, uint8_t pin_ws, uint8_t pin_data){
     AudioLogger::instance().begin(Serial, AudioLogger::Warning);
-    auto config = _i2s.defaultConfig(TX_MODE);
-    
+
+    auto config = _i2s.defaultConfig(TX_MODE);    
     self = this;
 
-    _source = new AudioSourceVector<FsFile>(&file_to_stream_callback);
-    _player = new AudioPlayer(*_source, _i2s, _decoder);
-    _directory = new NamePrinter(*_source);
+    _source     = new AudioSourceVector<FsFile>(&file_to_stream_callback);
+    _player     = new AudioPlayer(*_source, _i2s, _decoder);
+    _directory  = new NamePrinter(*_source);
 
     config.pin_bck  = pin_bck;
     config.pin_ws   = pin_ws;
@@ -19,7 +19,7 @@ bool MalkuthAudio::init(uint8_t pin_bck, uint8_t pin_ws, uint8_t pin_data){
     _decoder.addDecoder(_decoder_mp3, "audio/mpeg");
     _decoder.addDecoder(_decoder_aac, "audio/aac");
     _decoder.addDecoder(_decoder_wav, "audio/vnd.wave");
-    _decoder.addDecoder(_decoder_flac, "audio/flac");
+    _decoder.addDecoder(_decoder_flac,"audio/flac");
 
     if (!_i2s.begin(config)) {
       Serial.println("I2S failed to start");
@@ -88,6 +88,7 @@ FsFile* MalkuthAudio::file_to_stream(const char* path, FsFile& old_file){
         _not_a_music = true;
       return &_audio_file;
     }
+
     _not_a_music = false;
     return &_audio_file;
   }
@@ -438,8 +439,12 @@ void MalkuthAudio::reset(){
     memset(_cover_path, sizeof(_cover_path), 0);
 }
 
-void MalkuthAudio::loop() {
-    _player->copy();
+size_t MalkuthAudio::loop() {
+    return _player->copy();
+}
+
+size_t MalkuthAudio::loop_all() {
+    return _player->copyAll();
 }
 
 void MalkuthAudio::toggle(bool active) {
@@ -536,6 +541,7 @@ void MalkuthAudio::process_directory(const char* path){
       Serial.println("Player failed to start");
       return;      
     }
+
     set_volume(_volume);
 }
 
