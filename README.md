@@ -26,9 +26,11 @@ I create this to fulfill my final project of Microcomputer class lmao.
 - ILI9488 Capacitive Touch Screen Display
 - PCM5102a DAC
 - MicroSD Card Module
-- ESP32-S3 V2
+- ESP32-S3 N16R8
 - Kailh Choc v2 switch
 - Other small components stuff
+
+For now, 16 MB Storage size is needed to keep the font files (they take like 50% of the spaces 💀). I will make it a .vlw file and store it inside SPIFFS or LittleFS (that is the task of future me though)
 
 ## Screenshot
 
