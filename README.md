@@ -36,9 +36,9 @@ For now, 16 MB Storage size is needed to keep the font files (they take like 50%
 
 <table>
   <tr>
-    <td> <img src="./assets/player_menu.jpg" alt="Player Menu" width="300"></td>
-    <td> <img src="./assets/files_menu.jpg" alt="Files Menu" width="300"></td>
-    <td> <img src="./assets/settings_menu.jpg" alt="Settings Menu" width="300"></td>
+    <td> <img src="./assets/page_player.jpg" alt="Player Menu" width="300"></td>
+    <td> <img src="./assets/page_files.jpg" alt="Files Menu" width="300"></td>
+    <td> <img src="./assets/page_settings.jpg" alt="Settings Menu" width="300"></td>
   </tr> 
 </table>
 

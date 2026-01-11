@@ -304,7 +304,7 @@ void check_metadata(){
             display.text(Anchor::BOTTOM_RIGHT, true, time_buf, Theme::FONT_SMALL, Theme::C_WHITE, -20, -110);
         }
 
-        if (current_page == Page::FILES)
+        if (current_page == Page::FILES && (strcmp(current_directory, selected_directory) == 0))
             page_files_listing(start_idx);
     }
 }
