@@ -122,6 +122,9 @@ private:
     uint16_t _ts_x = 0;
     uint16_t _ts_y = 0;
     uint32_t _hold_timeout;
+    
+    bool    _touch_active = false;
+    const   Button* _active_button = nullptr;
 
     QueueHandle_t _queue_display        = nullptr;
     TaskHandle_t  _taskhandle_display   = nullptr;
@@ -200,7 +203,7 @@ public:
             Anchor anchor, 
             const uint16_t size_x,  const uint16_t size_y, 
             const uint16_t color,   const uint8_t roundness,
-            const int8_t offset_x,  const int8_t offset_y
+            const int16_t offset_x,  const int16_t offset_y
     );
 
     void button(
@@ -208,7 +211,7 @@ public:
             const uint16_t size_x,  const uint16_t size_y,
             const int16_t offset_x, const int16_t offset_y, 
             const std::function<void(void*)>& func, void* param = nullptr,
-             bool is_temp = false
+            bool is_temp = false
     ),   button(
             Anchor anchor,
             const uint16_t size_x,  const uint16_t size_y,
@@ -224,7 +227,7 @@ public:
             const std::function<void(void*)>& func, void* param = nullptr,
             const bool is_temp = false
     );
-
+    
     void bar(
             Anchor anchor,
             uint16_t size_x, uint16_t size_y,

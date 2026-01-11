@@ -4,22 +4,34 @@ MalkuthAudio* MalkuthAudio::self = nullptr;
 
 bool MalkuthAudio::init(uint8_t pin_bck, uint8_t pin_ws, uint8_t pin_data){
     AudioLogger::instance().begin(Serial, AudioLogger::Warning);
-
-    auto config = _i2s.defaultConfig(TX_MODE);    
+  
+    auto config = _i2s.defaultConfig(TX_MODE);
+        
     self = this;
 
-    _source     = new AudioSourceVector<FsFile>(&file_to_stream_callback);
+    _source     = new AudioSourceVector<FsFile>(&file_to_stream_cb);
     _player     = new AudioPlayer(*_source, _i2s, _decoder);
-    _directory  = new NamePrinter(*_source);
 
     config.pin_bck  = pin_bck;
     config.pin_ws   = pin_ws;
     config.pin_data = pin_data;
+    config.buffer_size = 1024 * 16;
+    config.buffer_count = 6;
 
-    _decoder.addDecoder(_decoder_mp3, "audio/mpeg");
-    _decoder.addDecoder(_decoder_aac, "audio/aac");
-    _decoder.addDecoder(_decoder_wav, "audio/vnd.wave");
-    _decoder.addDecoder(_decoder_flac,"audio/flac");
+    _player->setMetadataCallback(&metadata_print_cb);
+    _player->getStreamCopy().copyN(5);
+    _player->setBufferSize(1024 * 16);
+    _player->setAutoNext(true);
+    _player->setAutoFade(true);
+
+    _decoder_flac.setMaxBlockSize(1024 * 16);
+    _decoder_flac.setInBufferSize(1024 * 8);
+    _decoder_flac.setOutBufferSize(1024 * 16);
+    _decoder_flac.setMaxChannels(4);
+
+    _decoder.addDecoder(_decoder_mp3,   "audio/mpeg");
+    _decoder.addDecoder(_decoder_wav,   "audio/vnd.wave");
+    _decoder.addDecoder(_decoder_flac,  "audio/flac");
 
     if (!_i2s.begin(config)) {
       Serial.println("I2S failed to start");
@@ -28,10 +40,20 @@ bool MalkuthAudio::init(uint8_t pin_bck, uint8_t pin_ws, uint8_t pin_data){
     return true;
 }
 
-FsFile* MalkuthAudio::file_to_stream_callback(const char* path, FsFile& old_file){
-    return self->file_to_stream(path, old_file);
+void MalkuthAudio::metadata_print_cb(MetaDataType type, const char* str, int len){
+    return self->metadata_print(type, str, len);
 }
 
+void MalkuthAudio::metadata_print(MetaDataType type, const char* str, int len){
+    // Serial.print("==> ");
+    // Serial.print(toStr(type));
+    // Serial.print(": ");
+    // Serial.println(str);
+}
+
+FsFile* MalkuthAudio::file_to_stream_cb(const char* path, FsFile& old_file){
+    return self->file_to_stream(path, old_file);
+}
 
 FsFile* MalkuthAudio::file_to_stream(const char* path, FsFile& old_file){
     if (old_file.isOpen()) {
@@ -39,8 +61,8 @@ FsFile* MalkuthAudio::file_to_stream(const char* path, FsFile& old_file){
     }
     reset();
 
-    String fullPath = String(path);
-    String filename = fullPath.substring(fullPath.lastIndexOf('/') + 1);
+    String path_str = String(path);
+    String filename = path_str.substring(path_str.lastIndexOf('/') + 1);
     filename.toLowerCase();
 
     const char* file_extension[] = { ".mp3", ".flac", ".wav" };
@@ -89,12 +111,12 @@ FsFile* MalkuthAudio::file_to_stream(const char* path, FsFile& old_file){
       return &_audio_file;
     }
 
+    strncpy(_current_audiopath, path, sizeof(_current_audiopath));
     _not_a_music = false;
     return &_audio_file;
-  }
+}
 
-
-  AudioMetadata MalkuthAudio::get_metadata_flac_vorbis(FsFile& file, uint32_t size) { 
+AudioMetadata MalkuthAudio::get_metadata_flac_vorbis(FsFile& file, uint32_t size) { 
     AudioMetadata metadata;
     uint32_t vendor_len;
     if (file.read(&vendor_len, 4) != 4) return metadata;
@@ -126,11 +148,12 @@ FsFile* MalkuthAudio::file_to_stream(const char* path, FsFile& old_file){
     }
 
     return metadata;
-  }
+}
 
 AudioMetadata MalkuthAudio::get_metadata_flac(FsFile& file) {
     AudioMetadata metadata;
-    float temp_duration;
+
+    float temp_duration = 0.0f;
 
     file.seek(0);
     char sig[4];
@@ -157,6 +180,9 @@ AudioMetadata MalkuthAudio::get_metadata_flac(FsFile& file) {
         uint64_t total_samples = ((uint64_t)(buf[13] & 0x0F) << 32) | ((uint64_t)buf[14] << 24) | ((uint64_t)buf[15] << 16) | ((uint64_t)buf[16] << 8) | buf[17];
 
         temp_duration = (float)total_samples / sample_rate;
+        
+        metadata.total_samples = total_samples;
+        metadata.sample_rate  = sample_rate;
       } else if (block_type == 4) {
         metadata = get_metadata_flac_vorbis(file, block_size);
         metadata.duration = temp_duration;
@@ -165,9 +191,11 @@ AudioMetadata MalkuthAudio::get_metadata_flac(FsFile& file) {
         file.seek(file.position() + block_size);
       }
     }
+
+    metadata.data_offset = file.position();
     metadata.duration = temp_duration;
     return metadata;
-  }
+}
 
 AudioMetadata MalkuthAudio::get_metadata_mp3v1(FsFile& file) {
     AudioMetadata metadata;
@@ -193,41 +221,134 @@ AudioMetadata MalkuthAudio::get_metadata_mp3v1(FsFile& file) {
     metadata.duration = get_metadata_mp3_duration(file);
     
     return metadata;
-  }
+}
+
+bool MalkuthAudio::mp3_id3skip(FsFile& file) {
+    file.seek(0);
+    uint8_t hdr[10];
+    if (file.read(hdr, 10) != 10) return false;
+
+    if (memcmp(hdr, "ID3", 3) != 0) {
+        file.seek(0);
+        return false;
+    }
+
+    uint32_t size =
+        ((hdr[6] & 0x7F) << 21) |
+        ((hdr[7] & 0x7F) << 14) |
+        ((hdr[8] & 0x7F) << 7)  |
+        (hdr[9] & 0x7F);
+
+    file.seek(10 + size);
+    return true;
+}
+
+bool MalkuthAudio::mp3_frameheader(FsFile& file, uint32_t& hdr) {
+    uint8_t b[4];
+    if (file.read(b, 4) != 4) return false;
+    hdr = (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3];
+    return (hdr & 0xFFE00000) == 0xFFE00000;
+}
+
+int MalkuthAudio::mp3_sampleframe(uint32_t hdr) {
+    int version = (hdr >> 19) & 3;
+    return (version == 3) ? 1152 : 576;
+}
+
+int MalkuthAudio::mp3_samplerate(uint32_t hdr) {
+    int version = (hdr >> 19) & 3;
+    int srIdx   = (hdr >> 10) & 3;
+    if (srIdx == 3) return 0;
+    return sampleRateTable[version][srIdx];
+}
+
+int MalkuthAudio::mp3_bitrate(uint32_t hdr) {
+    int version = (hdr >> 19) & 3;
+    int layer   = (hdr >> 17) & 3;
+    int brIdx   = (hdr >> 12) & 0xF;
+
+    if (layer != 1 || brIdx == 0 || brIdx == 15) return 0;
+
+    bool mpeg1 = (version == 3);
+    return bitrateTable[mpeg1 ? 0 : 1][brIdx] * 1000;
+}
+
+int MalkuthAudio::mp3_xing_offset(uint32_t hdr) {
+    bool mpeg1 = ((hdr >> 19) & 3) == 3;
+    bool mono  = ((hdr >> 6) & 3) == 3;
+
+    if (mpeg1)
+        return mono ? 21 : 36;
+    else
+        return mono ? 13 : 21;
+}
 
 float MalkuthAudio::get_metadata_mp3_duration(FsFile& file) {
-    file.seek(0);
-    uint8_t buf[1024];
-    size_t read = file.read(buf, sizeof(buf));
-    int sample_rate = 44100;
-    int bitrate = 128000;
+    mp3_id3skip(file);
 
-    for (int i = 0; i < read - 4; i++) {
-      if (buf[i] == 0xFF && (buf[i + 1] & 0xE0) == 0xE0) {
-        int version = (buf[i + 1] & 0x18) >> 3;
-        int sr_idx = (buf[i + 2] & 0x0C) >> 2;
-        int br_idx = (buf[i + 2] & 0xF0) >> 4;
+    uint32_t hdr;
+    if (!mp3_frameheader(file, hdr)) return -1;
 
-        const int sr_table[3][3] = { 
-          { 44100, 48000, 32000 }, 
-          { 22050, 24000, 16000 }, 
-          { 11025, 12000, 8000 } 
-        };
+    int sample_rate  = mp3_samplerate(hdr);
+    int sample_frame = mp3_sampleframe(hdr);
+    if (!sample_rate) return -1;
 
-        const int br_table[2][15] = {
-          { 0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448 },
-          { 0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256 }
-        };
+    // ---- Xing / Info ----
+    int off = mp3_xing_offset(hdr);
+    file.seek(file.curPosition() + off);
 
-        sample_rate = sr_table[version == 3 ? 0 : (version == 2 ? 1 : 2)][sr_idx];
-        bitrate = br_table[version == 3 ? 0 : 1][br_idx] * 1000;
-        break;
-      }
+    char tag[4];
+    file.read(tag, 4);
+
+    if (!memcmp(tag, "Xing", 4) || !memcmp(tag, "Info", 4)) {
+        uint32_t flags;
+        file.read(&flags, 4);
+        flags = __builtin_bswap32(flags);
+
+        if (flags & 0x01) {
+            uint32_t frames;
+            file.read(&frames, 4);
+            frames = __builtin_bswap32(frames);
+
+            return (float)(frames * sample_frame) / sample_rate;
+        }
     }
 
+    // ---- VBRI ----
+    file.seek(file.curPosition() + 32);
+    file.read(tag, 4);
+
+    if (!memcmp(tag, "VBRI", 4)) {
+        file.seek(file.curPosition() + 10);
+        uint32_t frames;
+        file.read(&frames, 4);
+        frames = __builtin_bswap32(frames);
+
+        return (float)(frames * sample_frame) / sample_rate;
+    }
+
+    // ---- CBR fallback ----
+    int bitrate = mp3_bitrate(hdr);
     if (bitrate > 0) {
-      return (float)file.size() * 8 / bitrate;
+        return (float)file.size() * 8.0f / bitrate;
     }
+
+    file.seek(0);
+    mp3_id3skip(file);
+
+    uint32_t count = 0;
+    while (mp3_frameheader(file, hdr)) {
+        int br = mp3_bitrate(hdr);
+        int sr = mp3_samplerate(hdr);
+        if (!br || !sr) break;
+
+        int padding = (hdr >> 9) & 1;
+        int frameLen = (144 * br) / sr + padding;
+        file.seek(file.curPosition() + frameLen - 4);
+        count++;
+    }
+
+    return (float)(count * sample_frame) / sample_rate;
 }
 
 // Idk what does it do exactly, but basically just extract metadata
@@ -340,6 +461,8 @@ AudioMetadata MalkuthAudio::get_metadata_mp3(FsFile& file) {
       file.seek(pos);
     }
 
+    metadata.duration = get_metadata_mp3_duration(file);
+
     return metadata;
 }
 
@@ -430,16 +553,18 @@ AudioMetadata MalkuthAudio::get_metadata(){
 void MalkuthAudio::reset(){
     _please_update = true;
     _i2s.resetBytesWritten();
+    _decoder_flac.flush();
 
     _current_track.artist.clear();
     _current_track.title.clear();
     _current_track.album.clear();
     _current_track.duration = 0;
-
-    memset(_cover_path, sizeof(_cover_path), 0);
+    
+    memset(_cover_path, 0, sizeof(_cover_path));
 }
 
 size_t MalkuthAudio::loop() {
+    // return _copier->copy();
     return _player->copy();
 }
 
@@ -498,43 +623,48 @@ void MalkuthAudio::set_volume(uint8_t percent){
 
     _volume = percent;
 
-    float real_percent = percent / 100.0f;
+    float real_percent = (float)_volume / 100.0f;
     _player->setVolume(real_percent);
+}
+
+void MalkuthAudio::set_path(const char* path){
+    _player->setPath(path);
+}
+
+void MalkuthAudio::set_index(int16_t index){
+    _player->setIndex(index);
 }
 
 void MalkuthAudio::process_directory(const char* path){
     _player->stop();
-
-    _directory->flush();
     _source->clear();
+
+    // SdFile dir;
+    // SdFile entry;
+
+    // dir.open(path);
+
+    // _image_type = ImageType::NONE;
+    // while (entry.openNext(&dir, O_RDONLY)){
+    //     char filename[256];
+
+    //     entry.getName(filename, sizeof(filename));
+
+    //     String full_path = String(path) + String(filename);
+
+    //     process_albumcover(full_path);
+    //     entry.close();
+    // }
+
+    // dir.close();
+    NamePrinter directory = NamePrinter(*_source, path);
 
     _audio_file = _sd->open(path, O_READ);
     if (!_audio_file) {
         return;
     }
 
-    SdFile dir;
-    SdFile entry;
-    _image_type = ImageType::NONE;
-
-    dir.open(path);
-
-    while (entry.openNext(&dir, O_RDONLY)){
-        char filename[256];
-
-        entry.getName(filename, sizeof(filename));
-
-        String full_path = String(path) + String(filename);
-
-        process_albumcover(full_path);
-        entry.close();
-    }
-
-    dir.close();
-
-    _directory->setPrefix(path);
-    _audio_file.rewind();
-    _audio_file.ls(_directory, LS_R);
+    _audio_file.ls(&directory, LS_A);
     _audio_file.close();
 
     if (!_player->begin()){
@@ -561,9 +691,55 @@ char* MalkuthAudio::get_coverpath(){
     return _cover_path;
 }
 
+char* MalkuthAudio::get_audiopath(){
+    return _current_audiopath;
+}
+
 ImageType MalkuthAudio::get_covertype(){
     return _image_type;
 }
+
+char* MalkuthAudio::get_file_extension(){
+    String filename = String(_current_audiopath);
+    if (filename.endsWith(".mp3"))        return "mp3";
+    else if (filename.endsWith(".flac"))  return "flac";
+    else if (filename.endsWith(".wav"))   return "wav";
+    else return "Not supported";
+}
+
+void MalkuthAudio::set_position(uint8_t percent){
+    // TODO : Audio PLayback
+    // if (_not_a_music) return;
+    // if (percent > 100) percent = 100;
+
+    // String ext = String(_current_audiopath);
+    // ext.toLowerCase();
+    // if (!ext.endsWith(".flac")) return;
+
+    // if (_current_track.duration <= 0.0f) return;
+
+    // float targetSeconds = (_current_track.duration * percent) / 100.0f;
+    // uint32_t data_start = _current_track.data_offset;
+    // uint32_t file_size  = _audio_file.size();
+
+    // if (file_size <= data_start) return;
+
+    // float bytesPerSecond = (float)(file_size - data_start) / _current_track.duration;
+
+    // uint32_t targetByte = data_start + (uint32_t)(bytesPerSecond * targetSeconds);
+
+    // if (targetByte >= file_size)
+    //     targetByte = file_size - 1;
+
+    // _player->stop();
+    // _i2s.resetBytesWritten();
+
+    // _audio_file.seek(targetByte);
+    // _decoder_flac.flush();
+
+    // _player->play();
+}
+
 
 bool MalkuthAudio::is_actually_audio(){
     return (!_not_a_music);

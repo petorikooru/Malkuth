@@ -10,9 +10,11 @@ void MalkuthDisplay::task_display(void* parameters) {
     DisplayCommand cmd;
 
     self->_tft.init();
+
     self->_tft.setRotation(0);
     self->_tft.setAttribute(UTF8_SWITCH, true);
     self->_tft.setAttribute(PSRAM_ENABLE, true);
+
     self->set_brightness(self->_brightness);
     self->_ts_exist = self->_ts.begin(40, 16, 15);
 
@@ -222,7 +224,7 @@ void MalkuthDisplay::draw_text(MalkuthDisplay* self, const DisplayCommand& cmd) 
     sprite_h = tft.height();
 
   spr.createSprite(sprite_w, sprite_h);
-  spr.setTextColor(txt.color, self->_bg_color);
+  spr.setTextColor(txt.color, self->_bg_color, false);
 
   spr.fillSprite(TFT_TRANSPARENT);
   spr.setTextDatum(MC_DATUM);
@@ -262,7 +264,7 @@ void MalkuthDisplay::draw_object(MalkuthDisplay* self, const DisplayCommand& cmd
   }
 
   int16_t dest_x = obj.offset_x + self->calculate_anchor_x(obj.anchor, sprite_w);
-  int16_t dest_y = obj.offset_y + self->calculate_anchor_y(obj.anchor, sprite_h);;
+  int16_t dest_y = obj.offset_y + self->calculate_anchor_y(obj.anchor, sprite_h);
 
   tft.fillRoundRect(dest_x, dest_y, sprite_w, sprite_h, radius, obj.color);
 }
@@ -270,7 +272,7 @@ void MalkuthDisplay::draw_object(MalkuthDisplay* self, const DisplayCommand& cmd
 void MalkuthDisplay::draw_bar(MalkuthDisplay* self, const DisplayCommand& cmd) {
     const auto& bar = cmd.payload.bar;
 
-    uint16_t fill_w = map(bar.value, 0, 100, 0, bar.size_x);\
+    uint16_t fill_w = map(bar.value, 0, 100, 0, bar.size_x);
 
     self->_tft.fillRoundRect(bar.offset_x, bar.offset_y, bar.size_x, bar.size_y, bar.roundness, bar.color_bg);
     if (bar.value > 0) {
@@ -486,7 +488,15 @@ void MalkuthDisplay::_buttons_check() {
     if (now < _hold_timeout) return;
 
     TS_Point p = _ts.getPoint();
-    if (p.z == 0) return;
+    if (p.z == 0) {
+        _touch_active = false;
+        _active_button = nullptr;
+        return;
+    }
+
+    if (_touch_active) {
+        return;
+    }
 
     auto check = [&](const std::vector<Button>& buttons) -> bool {
         for (const auto& btn : buttons) {
@@ -498,8 +508,12 @@ void MalkuthDisplay::_buttons_check() {
                 if (btn.func) {
                     btn.func(btn.param);
 
-                    // 60 fps response for the bar
-                    _hold_timeout = now + (btn.is_bar ? 16 : 150);
+                    if (!btn.is_bar) {
+                        _touch_active  = true;
+                        _active_button = &btn;
+                    }
+                    // 60 fps response
+                    _hold_timeout = now + 16;
                     return true;
                 }
             }
@@ -658,7 +672,7 @@ void MalkuthDisplay::object(
     Anchor anchor,
     const uint16_t size_x, const uint16_t size_y,
     const uint16_t color, const uint8_t roundness,
-    const int8_t offset_x, const int8_t offset_y) {
+    const int16_t offset_x, const int16_t offset_y) {
     DisplayCommand cmd = {
       .type = DisplayType::OBJECT,
       .payload = { .object = {

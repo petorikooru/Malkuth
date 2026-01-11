@@ -1,3 +1,5 @@
+#define USE_EXPERIMENTAL 1
+
 #include <AudioTools.h>
 #include <AudioTools/Disk/AudioSourceSDFAT.h>
 #include <AudioTools/AudioCodecs/CodecFLACFoxen.h>
@@ -16,7 +18,10 @@ typedef struct {
     String title;
     String album;
 
-    float duration;
+    float duration;    
+    uint64_t total_samples;
+    uint32_t sample_rate;
+    uint32_t data_offset;
 } AudioMetadata;
 
 class CustomI2S : public I2SStream {
@@ -44,32 +49,48 @@ public:
   }
 };
 
+// MP3 duration estimation
+static const int sampleRateTable[4][3] = {
+    {11025,12000,8000},    // MPEG 2.5
+    {0,0,0},               // reserved
+    {22050,24000,16000},   // MPEG 2
+    {44100,48000,32000}    // MPEG 1
+};
+
+static const int bitrateTable[2][16] = {
+    // MPEG1 Layer III
+    {0,32,40,48,56,64,80,96,112,128,160,192,224,256,320,0},
+    // MPEG2/2.5 Layer III
+    {0,8,16,24,32,40,48,56,64,80,96,112,128,144,160,0}
+};
 
 class MalkuthAudio {
 private:
-    FsFile    _audio_file;
-    SdFs*     _sd;
-    bool      _playing;
-    uint8_t   _volume = 10;
-    static float     _current_duration;
+    FsFile          _audio_file;
+    SdFs*           _sd;
+    bool            _playing                = false;
+    uint8_t         _volume                 = 10;
+    static float    _current_duration;
+    char            _current_audiopath[255] = {};
+
+    uint32_t data_start = 0;
 
     AudioSourceVector<FsFile>*  _source;
     AudioPlayer*                _player;
 
     // TODO :  Multiprocessing on Audio
-    BufferRTOS<uint8_t>  _buffer_audio;
-    QueueStream<uint8_t> _queue_audio;
+    // BufferRTOS<uint8_t>  _buffer_audio;
+    // QueueStream<uint8_t> _queue_audio;
+    // StreamCopy*          _copier; 
 
     CustomI2S _i2s;
 
     MultiDecoder      _decoder;
     FLACDecoderFoxen  _decoder_flac;
     MP3DecoderHelix   _decoder_mp3;
-    AACDecoderHelix   _decoder_aac;
     WAVDecoder        _decoder_wav;
 
     AudioMetadata  _current_track;
-    NamePrinter*   _directory;
 
     bool _please_update = false;
     bool _not_a_music   = false;
@@ -86,11 +107,11 @@ private:
     char      _cover_path[128] = {};
     ImageType _image_type;
 
-    static FsFile*  file_to_stream_callback(const char* path, FsFile& old_file);
+    static FsFile*  file_to_stream_cb(const char* path, FsFile& old_file);
     FsFile*         file_to_stream(const char* path, FsFile& old_file);
 
-    // static void  file_to_stream_callback(const char* path, FsFile& old_file);
-    // void         file_to_stream(const char* path, FsFile& old_file);
+    static void  metadata_print_cb(MetaDataType type, const char* str, int len);
+    void         metadata_print(MetaDataType type, const char* str, int len);
 
     static AudioMetadata get_metadata(FsFile& file, const char* path);
 
@@ -101,13 +122,20 @@ private:
     static AudioMetadata get_metadata_mp3v1(FsFile& file);
     static float         get_metadata_mp3_duration(FsFile& file);
 
+    static bool  mp3_id3skip(FsFile& file);
+    static bool  mp3_frameheader(FsFile& file, uint32_t& hdr);
+    static int   mp3_sampleframe(uint32_t hdr);
+    static int   mp3_samplerate(uint32_t hdr);
+    static int   mp3_bitrate(uint32_t hdr);
+    static int   mp3_xing_offset(uint32_t hdr);
+
     static AudioMetadata get_metadata_wav(FsFile& file);
 
 public:
-  MalkuthAudio():
-    _buffer_audio(1024 * 10),
-    _queue_audio(_buffer_audio)
-  {}
+  // MalkuthAudio():
+  //   _buffer_audio(1024 * 10),
+  //   _queue_audio(_buffer_audio)
+  // {}
 
     bool init(uint8_t pin_bck = 8, uint8_t pin_ws = 17, uint8_t pin_data = 18);
     void reset();
@@ -119,6 +147,9 @@ public:
 
     void set_sdfs(SdFs& sd);
     void set_volume(uint8_t percent);
+    void set_path(const char* path);
+    void set_index(int16_t index);
+    void set_position(uint8_t percent);
 
     size_t loop();
     size_t loop_all();
@@ -135,7 +166,9 @@ public:
     bool    get_status();
     float   get_position();
     char*   get_coverpath();
+    char*   get_audiopath();
     ImageType get_covertype();
+    char*   get_file_extension();
 
     bool    is_actually_audio();
     void  yeah_i_have_updated();

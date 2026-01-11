@@ -30,7 +30,7 @@ I create this to fulfill my final project of Microcomputer class lmao.
 - Kailh Choc v2 switch
 - Other small components stuff
 
-For now, 16 MB Storage size is needed to keep the font files (they take like 50% of the spaces 💀). I will make it a .vlw file and store it inside SPIFFS or LittleFS (that is the task of future me though)
+For now, 16 MB Storage size is needed to keep the font files (they take like 50% of the spaces 💀). I will make them .vlw files and store it inside SPIFFS or LittleFS (that is the task of future me though)
 
 ## Screenshot
 
@@ -44,10 +44,10 @@ For now, 16 MB Storage size is needed to keep the font files (they take like 50%
 
 ## TODO List
 
-- Make the audio a task itself just like Display
+- Make the audio a task itself just like Display (The main trouble is that SdFat is not really thread safe)
 - Actually handle audio cover image (jpg and png)
 - More performance fixing stuff
-- Actually handle UI correctly instead of reloading from scratch
+- ~Actually handle UI correctly instead of reloading from scratch~ (Kinda done?)
 - 3D Printable Case
 
 ## Far (not really) to the future TODO LIST
